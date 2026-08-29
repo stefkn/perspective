@@ -139,4 +139,211 @@ export const EVENTS: TimelineEvent[] = [
     significance: 0.7,
     wikipediaUrl: wiki("Magna_Carta"),
   },
+  {
+    id: "black-death",
+    year: 1347,
+    title: "Black Death reaches Europe",
+    description:
+      "The bubonic plague arrives in Europe, killing a large share of the population.",
+    significance: 0.82,
+    wikipediaUrl: wiki("Black_Death"),
+  },
+  {
+    id: "printing-press",
+    year: 1440,
+    title: "Gutenberg's printing press",
+    description:
+      "Johannes Gutenberg develops movable type, transforming the spread of knowledge.",
+    significance: 0.92,
+    wikipediaUrl: wiki("Printing_press"),
+  },
+  {
+    id: "fall-constantinople",
+    year: 1453,
+    title: "Fall of Constantinople",
+    description:
+      "The Ottoman Empire captures Constantinople, ending the Byzantine Empire.",
+    significance: 0.72,
+    wikipediaUrl: wiki("Fall_of_Constantinople"),
+  },
+  {
+    id: "columbus-americas",
+    year: 1492,
+    title: "Columbus reaches the Americas",
+    description:
+      "Christopher Columbus's first voyage lands in the Americas.",
+    significance: 0.85,
+    wikipediaUrl: wiki("Voyages_of_Christopher_Columbus"),
+  },
+  {
+    id: "reformation",
+    year: 1517,
+    title: "Protestant Reformation begins",
+    description:
+      "Martin Luther posts his Ninety-five Theses, igniting the Reformation.",
+    significance: 0.6,
+    wikipediaUrl: wiki("Reformation"),
+  },
+  {
+    id: "newton-principia",
+    year: 1687,
+    title: "Newton's Principia published",
+    description:
+      "Isaac Newton publishes the Principia, laying the foundations of classical mechanics.",
+    significance: 0.62,
+    wikipediaUrl: wiki("Philosophiæ_Naturalis_Principia_Mathematica"),
+  },
+  {
+    id: "us-independence",
+    year: 1776,
+    title: "U.S. Declaration of Independence",
+    description:
+      "The Thirteen Colonies declare independence from Great Britain.",
+    significance: 0.8,
+    wikipediaUrl: wiki("United_States_Declaration_of_Independence"),
+  },
+  {
+    id: "french-revolution",
+    year: 1789,
+    title: "French Revolution begins",
+    description:
+      "The storming of the Bastille begins a revolution that reshapes France and Europe.",
+    significance: 0.8,
+    wikipediaUrl: wiki("French_Revolution"),
+  },
+  {
+    id: "origin-of-species",
+    year: 1859,
+    title: "On the Origin of Species",
+    description:
+      "Charles Darwin publishes his theory of evolution by natural selection.",
+    significance: 0.78,
+    wikipediaUrl: wiki("On_the_Origin_of_Species"),
+  },
+  {
+    id: "telephone",
+    year: 1876,
+    title: "Telephone patented",
+    description:
+      "Alexander Graham Bell patents the telephone.",
+    significance: 0.55,
+    wikipediaUrl: wiki("Invention_of_the_telephone"),
+  },
+  {
+    id: "wright-flight",
+    year: 1903,
+    title: "First powered flight",
+    description:
+      "The Wright brothers achieve the first powered, controlled airplane flight.",
+    significance: 0.6,
+    wikipediaUrl: wiki("Wright_brothers"),
+  },
+  {
+    id: "einstein-relativity",
+    year: 1905,
+    title: "Einstein's annus mirabilis",
+    description:
+      "Albert Einstein publishes his special theory of relativity and other landmark papers.",
+    significance: 0.76,
+    wikipediaUrl: wiki("Annus_mirabilis_papers"),
+  },
+  {
+    id: "world-war-i",
+    year: 1914,
+    title: "World War I begins",
+    description:
+      "The assassination of Archduke Franz Ferdinand leads to a global war.",
+    significance: 0.82,
+    wikipediaUrl: wiki("World_War_I"),
+  },
+  {
+    id: "penicillin",
+    year: 1928,
+    title: "Discovery of penicillin",
+    description:
+      "Alexander Fleming discovers penicillin, ushering in the antibiotic era.",
+    significance: 0.6,
+    wikipediaUrl: wiki("Penicillin"),
+  },
+  {
+    id: "world-war-ii",
+    year: 1939,
+    title: "World War II begins",
+    description:
+      "Germany invades Poland, beginning the deadliest conflict in history.",
+    significance: 0.94,
+    wikipediaUrl: wiki("World_War_II"),
+  },
+  {
+    id: "dna-structure",
+    year: 1953,
+    title: "DNA structure discovered",
+    description:
+      "Watson and Crick describe the double-helix structure of DNA.",
+    significance: 0.68,
+    wikipediaUrl: wiki("DNA"),
+  },
+  {
+    id: "sputnik",
+    year: 1957,
+    title: "Sputnik launched",
+    description:
+      "The Soviet Union launches Sputnik 1, the first artificial satellite.",
+    significance: 0.7,
+    wikipediaUrl: wiki("Sputnik_1"),
+  },
+  {
+    id: "mlk-dream",
+    year: 1963,
+    title: "\u201cI Have a Dream\u201d speech",
+    description:
+      "Martin Luther King Jr. delivers his landmark speech at the March on Washington.",
+    significance: 0.58,
+    wikipediaUrl: wiki("I_Have_a_Dream"),
+  },
+  {
+    id: "moon-landing",
+    year: 1969,
+    title: "Apollo 11 Moon landing",
+    description:
+      "Humans first set foot on the Moon, a defining moment of the Space Age.",
+    significance: 0.97,
+    wikipediaUrl: wiki("Apollo_11"),
+  },
+  {
+    id: "berlin-wall",
+    year: 1989,
+    title: "Fall of the Berlin Wall",
+    description:
+      "The Berlin Wall falls, hastening the end of the Cold War.",
+    significance: 0.7,
+    wikipediaUrl: wiki("Berlin_Wall"),
+  },
+  {
+    id: "world-wide-web",
+    year: 1989,
+    title: "World Wide Web invented",
+    description:
+      "Tim Berners-Lee proposes the World Wide Web, transforming communication.",
+    significance: 0.78,
+    wikipediaUrl: wiki("World_Wide_Web"),
+  },
+  {
+    id: "september-11",
+    year: 2001,
+    title: "September 11 attacks",
+    description:
+      "Coordinated attacks on the United States reshape global politics.",
+    significance: 0.86,
+    wikipediaUrl: wiki("September_11_attacks"),
+  },
+  {
+    id: "covid-pandemic",
+    year: 2020,
+    title: "COVID-19 pandemic",
+    description:
+      "A novel coronavirus spreads worldwide, upending daily life and economies.",
+    significance: 0.9,
+    wikipediaUrl: wiki("COVID-19_pandemic"),
+  },
 ];
