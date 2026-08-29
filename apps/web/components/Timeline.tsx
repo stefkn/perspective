@@ -3,18 +3,27 @@
 import { useMemo } from "react";
 import DeckGL from "@deck.gl/react";
 import { OrthographicView } from "@deck.gl/core";
-import { LineLayer, ScatterplotLayer } from "@deck.gl/layers";
+import {
+  LineLayer,
+  ScatterplotLayer,
+  TextLayer,
+} from "@deck.gl/layers";
 import type { TimelineEvent } from "../lib/types";
 import {
   yearToCoord,
+  NOW,
   type Orientation,
   type Scale,
 } from "../lib/time-transform";
 import { opacityForSignificance, significanceColor } from "../lib/significance";
+import { generateTicks } from "../lib/ticks";
 import type { TimeViewState } from "../lib/view-state";
 
 const AXIS_COLOR: [number, number, number] = [0x39, 0x41, 0x4d];
+const TICK_COLOR: [number, number, number] = [0x8a, 0x93, 0xa6];
 const NOW_COLOR: [number, number, number] = [0x7f, 0xd1, 0xff];
+
+const LABEL_ANGLE_DEG = 45;
 
 interface TimelineProps {
   events: TimelineEvent[];
@@ -24,6 +33,7 @@ interface TimelineProps {
   minSignificance: number;
   selectedId: string | null;
   coordExtent: [number, number];
+  labelAlpha: Record<string, number>;
   onViewStateChange: (vs: TimeViewState) => void;
   onResize: (size: { width: number; height: number }) => void;
   onSelect: (event: TimelineEvent | null) => void;
@@ -37,6 +47,7 @@ export default function Timeline({
   minSignificance,
   selectedId,
   coordExtent,
+  labelAlpha,
   onViewStateChange,
   onResize,
   onSelect,
@@ -58,6 +69,8 @@ export default function Timeline({
   );
 
   const layers = useMemo(() => {
+    const ticks = generateTicks(scale);
+
     const eventPoints = events
       .map((event) => {
         const selected = event.id === selectedId;
@@ -76,11 +89,64 @@ export default function Timeline({
       })
       .filter((p): p is NonNullable<typeof p> => p !== null);
 
+    const labels = events
+      .filter((event) => {
+        const alpha =
+          event.id === selectedId ? 1 : labelAlpha[event.id] ?? 0;
+        return alpha > 0.02;
+      })
+      .map((event) => {
+        const alpha =
+          event.id === selectedId ? 1 : labelAlpha[event.id] ?? 0;
+        const perp = orientation === "horizontal" ? -18 : 18;
+        return {
+          position: offset(yearToCoord(event.year, scale), perp),
+          text: event.title,
+          color: [
+            ...significanceColor(event.significance, 1).slice(0, 3),
+            Math.round(230 * alpha),
+          ] as [number, number, number, number],
+          event,
+        };
+      });
+
     const axisData = [
-      { source: offset(coordExtent[0], 0), target: offset(coordExtent[1], 0) },
+      {
+        source: offset(coordExtent[0], 0),
+        target: offset(coordExtent[1], 0),
+      },
     ];
 
-    const nowData = [{ source: offset(0, -24), target: offset(0, 24) }];
+    const nowData = [
+      { source: offset(0, -24), target: offset(0, 24) },
+    ];
+
+    const tickMarks = ticks.map((t) => ({
+      source: offset(t.coord, t.major ? -8 : -4),
+      target: offset(t.coord, t.major ? 8 : 4),
+    }));
+
+    const tickLabels = ticks.map((t) => {
+      if (orientation === "horizontal") {
+        return {
+          position: offset(t.coord, 16),
+          text: t.label,
+          anchor: "middle" as const,
+          baseline: "top" as const,
+        };
+      }
+      return {
+        position: offset(t.coord, -16),
+        text: t.label,
+        anchor: "end" as const,
+        baseline: "center" as const,
+      };
+    });
+
+    const nowLabel =
+      orientation === "horizontal"
+        ? { position: offset(0, 36), text: `Now · ${NOW}`, anchor: "middle" as const, baseline: "top" as const }
+        : { position: offset(0, -30), text: `Now · ${NOW}`, anchor: "end" as const, baseline: "center" as const };
 
     return [
       new LineLayer({
@@ -94,6 +160,29 @@ export default function Timeline({
         pickable: false,
       }),
       new LineLayer({
+        id: "ticks",
+        data: tickMarks,
+        getSourcePosition: (d) => d.source,
+        getTargetPosition: (d) => d.target,
+        getColor: AXIS_COLOR,
+        widthUnits: "pixels",
+        getWidth: 1,
+        pickable: false,
+      }),
+      new TextLayer({
+        id: "tick-labels",
+        data: tickLabels,
+        getPosition: (d) => d.position,
+        getText: (d) => d.text,
+        getTextAnchor: (d) => d.anchor,
+        getAlignmentBaseline: (d) => d.baseline,
+        getColor: TICK_COLOR,
+        sizeUnits: "pixels",
+        getSize: 11,
+        fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+        pickable: false,
+      }),
+      new LineLayer({
         id: "now",
         data: nowData,
         getSourcePosition: (d) => d.source,
@@ -101,6 +190,19 @@ export default function Timeline({
         getColor: NOW_COLOR,
         widthUnits: "pixels",
         getWidth: 2,
+        pickable: false,
+      }),
+      new TextLayer({
+        id: "now-label",
+        data: [nowLabel],
+        getPosition: (d) => d.position,
+        getText: (d) => d.text,
+        getTextAnchor: (d) => d.anchor,
+        getAlignmentBaseline: (d) => d.baseline,
+        getColor: NOW_COLOR,
+        sizeUnits: "pixels",
+        getSize: 12,
+        fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
         pickable: false,
       }),
       new ScatterplotLayer({
@@ -117,6 +219,22 @@ export default function Timeline({
         pickable: true,
         parameters: { depthTest: false },
       }),
+      new TextLayer({
+        id: "event-labels",
+        data: labels,
+        getPosition: (d) => d.position,
+        getText: (d) => d.text,
+        getTextAnchor: "start",
+        getAlignmentBaseline:
+          orientation === "horizontal" ? "bottom" : "center",
+        getAngle: orientation === "horizontal" ? LABEL_ANGLE_DEG : 0,
+        getColor: (d) => d.color,
+        sizeUnits: "pixels",
+        getSize: 13,
+        fontFamily: "ui-sans-serif, system-ui, -apple-system, sans-serif",
+        pickable: false,
+        parameters: { depthTest: false },
+      }),
     ];
   }, [
     events,
@@ -125,6 +243,7 @@ export default function Timeline({
     minSignificance,
     selectedId,
     coordExtent,
+    labelAlpha,
     viewState.zoomX,
     viewState.zoomY,
   ]);
