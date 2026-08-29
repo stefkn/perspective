@@ -7,6 +7,7 @@ import {
   LineLayer,
   ScatterplotLayer,
   TextLayer,
+  PolygonLayer,
 } from "@deck.gl/layers";
 import type { TimelineEvent } from "../lib/types";
 import {
@@ -17,6 +18,7 @@ import {
 } from "../lib/time-transform";
 import { opacityForSignificance, significanceColor } from "../lib/significance";
 import { generateTicks } from "../lib/ticks";
+import { assignPeriodLanes, laneOffset, PERIODS } from "../lib/periods";
 import type { TimeViewState } from "../lib/view-state";
 
 const AXIS_COLOR: [number, number, number] = [0x39, 0x41, 0x4d];
@@ -24,6 +26,11 @@ const TICK_COLOR: [number, number, number] = [0x8a, 0x93, 0xa6];
 const NOW_COLOR: [number, number, number] = [0x7f, 0xd1, 0xff];
 
 const LABEL_ANGLE_DEG = 45;
+
+const PERIOD_THICKNESS = 8;
+const PERIOD_FILL: [number, number, number, number] = [118, 158, 220, 34];
+const PERIOD_STROKE: [number, number, number, number] = [150, 190, 240, 90];
+const PERIOD_LABEL_COLOR: [number, number, number, number] = [176, 200, 232, 220];
 
 interface TimelineProps {
   events: TimelineEvent[];
@@ -67,6 +74,8 @@ export default function Timeline({
       }),
     [],
   );
+
+  const periodLanes = useMemo(() => assignPeriodLanes(PERIODS), []);
 
   const layers = useMemo(() => {
     const ticks = generateTicks(scale);
@@ -148,6 +157,65 @@ export default function Timeline({
         ? { position: offset(0, 36), text: `Now · ${NOW}`, anchor: "middle" as const, baseline: "top" as const }
         : { position: offset(0, -30), text: `Now · ${NOW}`, anchor: "end" as const, baseline: "center" as const };
 
+    const timeZoom = orientation === "horizontal" ? viewState.zoomX : viewState.zoomY;
+    const timeScale = Math.pow(2, timeZoom);
+
+    const periodBands = periodLanes.map(({ period, lane }) => {
+      const c0 = yearToCoord(period.startYear, scale);
+      const c1 = yearToCoord(period.endYear, scale);
+      const off = laneOffset(lane, PERIOD_THICKNESS);
+      const t = PERIOD_THICKNESS / 2;
+      let polygon: [number, number][];
+      if (orientation === "horizontal") {
+        polygon = [
+          [c0, off - t],
+          [c1, off - t],
+          [c1, off + t],
+          [c0, off + t],
+        ];
+      } else {
+        const y0 = -c1;
+        const y1 = -c0;
+        polygon = [
+          [off - t, y0],
+          [off + t, y0],
+          [off + t, y1],
+          [off - t, y1],
+        ];
+      }
+      return { polygon, period };
+    });
+
+    const periodLabels = periodLanes
+      .map(({ period, lane }) => {
+        const c0 = yearToCoord(period.startYear, scale);
+        const c1 = yearToCoord(period.endYear, scale);
+        const center = (c0 + c1) / 2;
+        const off = laneOffset(lane, PERIOD_THICKNESS);
+        const bandPixels = (c1 - c0) * timeScale;
+        const fits =
+          orientation === "horizontal"
+            ? bandPixels >= period.title.length * 7 + 12
+            : bandPixels >= 13 + 12;
+        if (!fits) return null;
+
+        if (orientation === "horizontal") {
+          return {
+            position: offset(center, off),
+            text: period.title,
+            anchor: "middle" as const,
+            baseline: "center" as const,
+          };
+        }
+        return {
+          position: offset(center, off + PERIOD_THICKNESS / 2 + 5),
+          text: period.title,
+          anchor: "start" as const,
+          baseline: "center" as const,
+        };
+      })
+      .filter((l): l is NonNullable<typeof l> => l !== null);
+
     return [
       new LineLayer({
         id: "axis",
@@ -181,6 +249,33 @@ export default function Timeline({
         getSize: 11,
         fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
         pickable: false,
+      }),
+      new PolygonLayer({
+        id: "period-bands",
+        data: periodBands,
+        getPolygon: (d) => d.polygon,
+        filled: true,
+        getFillColor: PERIOD_FILL,
+        stroked: true,
+        getLineColor: PERIOD_STROKE,
+        getLineWidth: 1,
+        lineWidthMinPixels: 1,
+        pickable: false,
+        parameters: { depthTest: false },
+      }),
+      new TextLayer({
+        id: "period-labels",
+        data: periodLabels,
+        getPosition: (d) => d.position,
+        getText: (d) => d.text,
+        getTextAnchor: (d) => d.anchor,
+        getAlignmentBaseline: (d) => d.baseline,
+        getColor: PERIOD_LABEL_COLOR,
+        sizeUnits: "pixels",
+        getSize: 11,
+        fontFamily: "ui-sans-serif, system-ui, -apple-system, sans-serif",
+        pickable: false,
+        parameters: { depthTest: false },
       }),
       new LineLayer({
         id: "now",
@@ -246,6 +341,7 @@ export default function Timeline({
     labelAlpha,
     viewState.zoomX,
     viewState.zoomY,
+    periodLanes,
   ]);
 
   return (
