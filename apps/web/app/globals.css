@@ -294,3 +294,15 @@ button {
   color: var(--muted);
   line-height: 1.4;
 }
+
+@media (max-width: 640px) {
+  .app-header-hint {
+    display: none;
+  }
+
+  .event-detail {
+    left: 12px;
+    right: 12px;
+    max-width: none;
+  }
+}
