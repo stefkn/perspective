@@ -1,3 +1,5 @@
+import TimelineApp from "@/components/TimelineApp";
+
 export default function Home() {
-  return <main>Perspective</main>;
+  return <TimelineApp />;
 }
