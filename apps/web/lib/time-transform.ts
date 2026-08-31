@@ -46,6 +46,15 @@ export function coordToWorld(
   return orientation === "horizontal" ? [coord, 0, 0] : [0, -coord, 0];
 }
 
+// Map a (time coord, perpendicular offset) pair into world coordinates.
+export function timeOffset(
+  coord: number,
+  perp: number,
+  orientation: Orientation,
+): [number, number, number] {
+  return orientation === "horizontal" ? [coord, perp, 0] : [perp, -coord, 0];
+}
+
 export function formatYear(year: number): string {
   if (year < 0) return `${Math.abs(year)} BCE`;
   return `${year}`;
