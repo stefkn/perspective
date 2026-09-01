@@ -5,6 +5,7 @@ export interface Interval {
   title: string;
   startYear: number;
   endYear: number;
+  estimated?: boolean;
 }
 
 export interface AssignedInterval<T extends Interval = Interval> {
