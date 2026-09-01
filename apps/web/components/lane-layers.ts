@@ -1,5 +1,6 @@
 import type { Layer } from "@deck.gl/core";
-import { PathLayer, PolygonLayer, TextLayer } from "@deck.gl/layers";
+import { LineLayer, PathLayer, PolygonLayer, TextLayer } from "@deck.gl/layers";
+import { PathStyleExtension } from "@deck.gl/extensions";
 import {
   yearToCoord,
   timeOffset,
@@ -44,6 +45,7 @@ import {
 } from "../lib/energy";
 import { PERIODS } from "../lib/periods";
 import { POWERS } from "../lib/powers";
+import { PEOPLE } from "../lib/people";
 
 const MONO = "ui-monospace, SFMono-Regular, Menlo, monospace";
 const SANS = "ui-sans-serif, system-ui, -apple-system, sans-serif";
@@ -58,8 +60,17 @@ const POWERS_FILL: [number, number, number, number] = [86, 200, 178, 30];
 const POWERS_STROKE: [number, number, number, number] = [120, 222, 202, 90];
 const POWERS_LABEL: [number, number, number, number] = [140, 222, 208, 220];
 
+const PEOPLE_FILL: [number, number, number, number] = [214, 150, 236, 36];
+const PEOPLE_STROKE: [number, number, number, number] = [222, 172, 240, 120];
+const PEOPLE_LABEL: [number, number, number, number] = [226, 190, 242, 220];
+const PEOPLE_EST_FILL: [number, number, number, number] = [214, 150, 236, 12];
+const PEOPLE_EST_STROKE: [number, number, number, number] = [222, 172, 240, 180];
+
 const PERIOD_THICKNESS = 8;
 const POWERS_THICKNESS = 8;
+const PEOPLE_THICKNESS = 6;
+
+const DASH_EXTENSION = new PathStyleExtension({ dash: true });
 const INTERVAL_BAND: LaneBand = { center: 0, half: 0 };
 
 type Anchor = "start" | "middle" | "end";
@@ -90,6 +101,8 @@ export interface LaneOptions {
   scale: Scale;
   coordExtent: [number, number];
   timeZoom: number;
+  visibleCoordRange?: [number, number];
+  visiblePerpRange?: [number, number];
 }
 
 interface IntervalBandOptions<T extends Interval = Interval> {
@@ -104,8 +117,221 @@ interface IntervalBandOptions<T extends Interval = Interval> {
   fillColor: [number, number, number, number];
   strokeColor: [number, number, number, number];
   labelColor: [number, number, number, number];
+  estimateFillColor?: [number, number, number, number];
+  estimateStrokeColor?: [number, number, number, number];
+  dashedEstimated?: boolean;
   title?: string;
   laneId?: string;
+  visibleCoordRange?: [number, number];
+  visiblePerpRange?: [number, number];
+}
+
+interface IntervalLabelCandidate {
+  id: string;
+  text: string;
+  coord: number;
+  perp: number;
+}
+
+interface ScreenBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+const INTERVAL_LABEL_FONT = 11;
+const INTERVAL_LABEL_HEIGHT = 13;
+const STAGGER_STEP = 14;
+const STAGGER_MAX_STEPS = 6;
+const LEADER_LINE_MIN_PX = 24;
+const SMOOTH_FACTOR = 0.3;
+
+// Remembers each label's current smoothed offset (in screen px) so it sticks
+// to its slot and glides toward a new one instead of flickering between
+// equally valid positions. Keyed by stable label id; the small set keeps this
+// bounded.
+const labelOffsetCache = new Map<string, [number, number]>();
+
+// Candidate (time-px, perp-px) offsets ordered by distance from the home slot,
+// so labels first try to sit still, then nudge along either axis, then both.
+const STAGGER_CANDIDATES: [number, number][] = (() => {
+  const offsets: [number, number][] = [];
+  for (let di = -STAGGER_MAX_STEPS; di <= STAGGER_MAX_STEPS; di++) {
+    for (let dj = -STAGGER_MAX_STEPS; dj <= STAGGER_MAX_STEPS; dj++) {
+      offsets.push([di * STAGGER_STEP, dj * STAGGER_STEP]);
+    }
+  }
+  offsets.sort(
+    (a, b) => a[0] * a[0] + a[1] * a[1] - (b[0] * b[0] + b[1] * b[1]),
+  );
+  return offsets;
+})();
+
+let intervalMeasureCtx: CanvasRenderingContext2D | null = null;
+const intervalWidthCache = new Map<string, number>();
+
+function measureIntervalLabel(text: string): number {
+  const cached = intervalWidthCache.get(text);
+  if (cached !== undefined) return cached;
+  let width = text.length * 6.6;
+  if (typeof document !== "undefined") {
+    if (!intervalMeasureCtx) {
+      const canvas = document.createElement("canvas");
+      intervalMeasureCtx = canvas.getContext("2d");
+    }
+    if (intervalMeasureCtx) {
+      intervalMeasureCtx.font = `${INTERVAL_LABEL_FONT}px ${SANS}`;
+      width = intervalMeasureCtx.measureText(text).width;
+    }
+  }
+  intervalWidthCache.set(text, width);
+  return width;
+}
+
+function boxesOverlap(a: ScreenBox, b: ScreenBox): boolean {
+  return (
+    a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
+  );
+}
+
+// Approximate on-screen box for a label at the given time/perp position, in
+// relative px. Horizontal: time runs along X and the text is centered on the
+// span. Vertical: time runs along Y and the text sits to the right of the band.
+function intervalLabelBox(
+  label: IntervalLabelCandidate,
+  coord: number,
+  perp: number,
+  orientation: Orientation,
+  timeScale: number,
+): ScreenBox {
+  const w = measureIntervalLabel(label.text);
+  const h = INTERVAL_LABEL_HEIGHT;
+  if (orientation === "horizontal") {
+    return { x: coord * timeScale - w / 2, y: perp - h / 2, w, h };
+  }
+  return { x: perp, y: coord * timeScale - h / 2, w, h };
+}
+
+function boxWithin(box: ScreenBox, vp: ScreenBox): boolean {
+  return (
+    box.x >= vp.x &&
+    box.y >= vp.y &&
+    box.x + box.w <= vp.x + vp.w &&
+    box.y + box.h <= vp.y + vp.h
+  );
+}
+
+// The visible viewport as a relative-px box, used to keep labels on screen.
+function viewportBox(
+  orientation: Orientation,
+  timeScale: number,
+  timeRange: [number, number],
+  perpRange: [number, number],
+): ScreenBox {
+  const [vMin, vMax] = timeRange;
+  const [pMin, pMax] = perpRange;
+  if (orientation === "horizontal") {
+    return {
+      x: vMin * timeScale,
+      y: pMin,
+      w: (vMax - vMin) * timeScale,
+      h: pMax - pMin,
+    };
+  }
+  return {
+    x: pMin,
+    y: vMin * timeScale,
+    w: pMax - pMin,
+    h: (vMax - vMin) * timeScale,
+  };
+}
+
+// Half of a label's extent along the time axis, in coord units. Horizontal
+// labels carry their text width along time; vertical labels carry their fixed
+// pixel line height along time.
+function labelTimeHalfExtent(
+  text: string,
+  orientation: Orientation,
+  timeScale: number,
+): number {
+  if (orientation === "horizontal") {
+    return measureIntervalLabel(text) / (2 * timeScale);
+  }
+  return INTERVAL_LABEL_HEIGHT / (2 * timeScale);
+}
+
+// Best-effort staggering: nudge labels that overlap on screen apart along both
+// axes, trying the nearest in-viewport free slots first. Each label's offset is
+// smoothed toward its target so placements glide instead of flickering while
+// zooming, and the previous offset is preferred so slots stay sticky.
+function staggerIntervalLabels(
+  labels: IntervalLabelCandidate[],
+  orientation: Orientation,
+  timeScale: number,
+  viewport: ScreenBox | null,
+): { coord: number; perp: number }[] {
+  const result = labels.map((l) => ({ coord: l.coord, perp: l.perp }));
+  if (labels.length === 0) return result;
+
+  const order = labels
+    .map((l, i) => ({ i, t: l.coord }))
+    .sort((a, b) => a.t - b.t);
+
+  const candidates = STAGGER_CANDIDATES.slice(1);
+  const placed: { box: ScreenBox }[] = [];
+
+  const boxFor = (label: IntervalLabelCandidate, offset: [number, number]) =>
+    intervalLabelBox(
+      label,
+      label.coord + offset[0] / timeScale,
+      label.perp + offset[1],
+      orientation,
+      timeScale,
+    );
+
+  const fitsIn = (box: ScreenBox) =>
+    (!viewport || boxWithin(box, viewport)) &&
+    !placed.some((p) => boxesOverlap(p.box, box));
+
+  for (const { i } of order) {
+    const label = labels[i];
+    const current = labelOffsetCache.get(label.id) ?? [0, 0];
+
+    let target: [number, number] = [0, 0];
+    if (fitsIn(boxFor(label, [0, 0]))) {
+      target = [0, 0];
+    } else if (
+      (current[0] !== 0 || current[1] !== 0) &&
+      fitsIn(boxFor(label, current))
+    ) {
+      target = current;
+    } else {
+      for (const offset of candidates) {
+        if (fitsIn(boxFor(label, offset))) {
+          target = offset;
+          break;
+        }
+      }
+    }
+
+    const next: [number, number] = [
+      current[0] + (target[0] - current[0]) * SMOOTH_FACTOR,
+      current[1] + (target[1] - current[1]) * SMOOTH_FACTOR,
+    ];
+    if (Math.abs(next[0] - target[0]) < 0.75) next[0] = target[0];
+    if (Math.abs(next[1] - target[1]) < 0.75) next[1] = target[1];
+
+    const box = boxFor(label, next);
+    placed.push({ box });
+    result[i] = {
+      coord: label.coord + next[0] / timeScale,
+      perp: label.perp + next[1],
+    };
+    labelOffsetCache.set(label.id, next);
+  }
+
+  return result;
 }
 
 // Build stacked interval bands (polygons + labels) for a lane or the main axis.
@@ -124,13 +350,21 @@ export function buildIntervalBands<T extends Interval = Interval>(
     fillColor,
     strokeColor,
     labelColor,
+    estimateFillColor,
+    estimateStrokeColor,
+    dashedEstimated,
     title,
     laneId,
+    visibleCoordRange,
+    visiblePerpRange,
   } = opts;
 
   const timeScale = Math.pow(2, timeZoom);
   const offset = (coord: number, perp: number) =>
     timeOffset(coord, perp, orientation);
+
+  const estimateFill = estimateFillColor ?? fillColor;
+  const estimateStroke = estimateStrokeColor ?? strokeColor;
 
   const bandData = assigned.map(({ interval, lane }) => {
     const c0 = yearToCoord(interval.startYear, scale);
@@ -155,41 +389,86 @@ export function buildIntervalBands<T extends Interval = Interval>(
         [off - t, y1],
       ];
     }
-    return laneId ? { polygon, laneId } : { polygon };
+    return laneId
+      ? { polygon, laneId, estimated: interval.estimated }
+      : { polygon, estimated: interval.estimated };
   });
 
-  const labelData: LaneLabel[] = assigned.flatMap(
-    ({ interval, lane }): LaneLabel[] => {
-      const c0 = yearToCoord(interval.startYear, scale);
-      const c1 = yearToCoord(interval.endYear, scale);
-      const center = (c0 + c1) / 2;
-      const off = band.center + laneOffset(lane, thickness);
-      const bandPixels = (c1 - c0) * timeScale;
-      const fits =
-        orientation === "horizontal"
-          ? bandPixels >= interval.title.length * 7 + 12
-          : bandPixels >= 13 + 12;
-      if (!fits) return [];
-      if (orientation === "horizontal") {
-        return [
-          {
-            position: offset(center, off),
-            text: interval.title,
-            anchor: "middle",
-            baseline: "center",
-          },
-        ];
-      }
-      return [
-        {
-          position: offset(center, off + thickness / 2 + 5),
-          text: interval.title,
-          anchor: "start",
-          baseline: "center",
-        },
-      ];
-    },
+  const viewport =
+    visibleCoordRange && visiblePerpRange
+      ? viewportBox(orientation, timeScale, visibleCoordRange, visiblePerpRange)
+      : null;
+
+  const labelCandidates: IntervalLabelCandidate[] = [];
+  for (const { interval, lane } of assigned) {
+    const c0 = yearToCoord(interval.startYear, scale);
+    const c1 = yearToCoord(interval.endYear, scale);
+    const displayTitle = interval.estimated
+      ? `≈ ${interval.title}`
+      : interval.title;
+
+    // Skip spans that don't intersect the viewport at all.
+    let coord = (c0 + c1) / 2;
+    if (visibleCoordRange) {
+      const [vMin, vMax] = visibleCoordRange;
+      if (c1 < vMin || c0 > vMax) continue;
+      const halfExt = labelTimeHalfExtent(displayTitle, orientation, timeScale);
+      const lo = vMin + halfExt;
+      const hi = vMax - halfExt;
+      coord = lo >= hi ? (vMin + vMax) / 2 : Math.min(Math.max(coord, lo), hi);
+    }
+
+    const off = band.center + laneOffset(lane, thickness);
+    const bandPixels = (c1 - c0) * timeScale;
+    const fits =
+      orientation === "horizontal"
+        ? bandPixels >= displayTitle.length * 7 + 12
+        : bandPixels >= 13 + 12;
+    if (!fits) continue;
+
+    labelCandidates.push({
+      id: `${id}:${interval.id}`,
+      text: displayTitle,
+      coord,
+      perp: orientation === "horizontal" ? off : off + thickness / 2 + 5,
+    });
+  }
+
+  const placedLabels = staggerIntervalLabels(
+    labelCandidates,
+    orientation,
+    timeScale,
+    viewport,
   );
+
+  const anchor: Anchor = orientation === "horizontal" ? "middle" : "start";
+
+  const labelData: LaneLabel[] = labelCandidates.map((label, i) => ({
+    position: offset(placedLabels[i].coord, placedLabels[i].perp),
+    text: label.text,
+    anchor,
+    baseline: "center",
+  }));
+
+  const leaderLines = labelCandidates.flatMap((label, i) => {
+    const p = placedLabels[i];
+    const dt = (p.coord - label.coord) * timeScale;
+    const dp = p.perp - label.perp;
+    if (Math.hypot(dt, dp) < LEADER_LINE_MIN_PX) return [];
+    return [
+      {
+        source: offset(label.coord, label.perp),
+        target: offset(p.coord, p.perp),
+      },
+    ];
+  });
+
+  const leaderColor: [number, number, number, number] = [
+    labelColor[0],
+    labelColor[1],
+    labelColor[2],
+    120,
+  ];
 
   const layers: Layer[] = [
     new PolygonLayer({
@@ -197,12 +476,30 @@ export function buildIntervalBands<T extends Interval = Interval>(
       data: bandData,
       getPolygon: (d) => d.polygon,
       filled: true,
-      getFillColor: fillColor,
+      getFillColor: (d) => (d.estimated ? estimateFill : fillColor),
       stroked: true,
-      getLineColor: strokeColor,
+      getLineColor: (d) => (d.estimated ? estimateStroke : strokeColor),
       getLineWidth: 1,
       lineWidthMinPixels: 1,
       pickable: !!laneId,
+      extensions: dashedEstimated ? [DASH_EXTENSION] : [],
+      getDashArray: dashedEstimated
+        ? (d: { estimated?: boolean }) =>
+            d.estimated
+              ? ([6, 4] as [number, number])
+              : ([0, 0] as [number, number])
+        : undefined,
+      parameters: { depthTest: false },
+    }),
+    new LineLayer({
+      id: `${id}-leader-lines`,
+      data: leaderLines,
+      getSourcePosition: (d) => d.source,
+      getTargetPosition: (d) => d.target,
+      getColor: leaderColor,
+      widthUnits: "pixels",
+      getWidth: 1,
+      pickable: false,
       parameters: { depthTest: false },
     }),
     new TextLayer({
@@ -554,6 +851,28 @@ export function buildLaneLayers(
   if (lane.kind === "stacked") {
     return buildEnergyLane({ band, ...opts });
   }
+  if (lane.id === "people") {
+    return buildIntervalBands({
+      id: "people",
+      assigned: assignIntervalLanes(PEOPLE),
+      orientation: opts.orientation,
+      scale: opts.scale,
+      coordExtent: opts.coordExtent,
+      band,
+      thickness: PEOPLE_THICKNESS,
+      timeZoom: opts.timeZoom,
+      fillColor: PEOPLE_FILL,
+      strokeColor: PEOPLE_STROKE,
+      labelColor: PEOPLE_LABEL,
+      estimateFillColor: PEOPLE_EST_FILL,
+      estimateStrokeColor: PEOPLE_EST_STROKE,
+      dashedEstimated: true,
+      title: "Notable lifespans",
+      laneId: "people",
+      visibleCoordRange: opts.visibleCoordRange,
+      visiblePerpRange: opts.visiblePerpRange,
+    });
+  }
   return buildIntervalBands({
     id: "powers",
     assigned: assignIntervalLanes(POWERS),
@@ -568,12 +887,14 @@ export function buildLaneLayers(
     labelColor: POWERS_LABEL,
     title: "Major world powers",
     laneId: "powers",
+    visibleCoordRange: opts.visibleCoordRange,
+    visiblePerpRange: opts.visiblePerpRange,
   });
 }
 
 // The timeline's own period bands, always rendered (not toggleable).
 export function buildPeriodBands(opts: LaneOptions): Layer[] {
-  const { orientation, scale, coordExtent, timeZoom } = opts;
+  const { orientation, scale, coordExtent, timeZoom, visibleCoordRange, visiblePerpRange } = opts;
   return buildIntervalBands({
     id: "periods",
     assigned: assignIntervalLanes(PERIODS),
@@ -586,5 +907,7 @@ export function buildPeriodBands(opts: LaneOptions): Layer[] {
     fillColor: PERIOD_FILL,
     strokeColor: PERIOD_STROKE,
     labelColor: PERIOD_LABEL,
+    visibleCoordRange,
+    visiblePerpRange,
   });
 }

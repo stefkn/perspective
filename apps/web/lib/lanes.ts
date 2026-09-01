@@ -100,6 +100,7 @@ export type LaneId =
   | "energy"
   | "co2"
   | "powers"
+  | "people"
   | "life-expectancy"
   | "gdp";
 
@@ -120,6 +121,7 @@ export const LANES: LaneDefinition[] = [
   { id: "energy", title: "Primary energy", kind: "stacked", side: -1, color: [220, 220, 230], defaultVisible: true },
   { id: "co2", title: "CO2 emissions", kind: "series", side: -1, color: [226, 96, 72], defaultVisible: true },
   { id: "powers", title: "Major world powers", kind: "intervals", side: 1, color: [86, 200, 178], defaultVisible: true },
+  { id: "people", title: "Notable lifespans", kind: "intervals", side: -1, color: [214, 150, 236], defaultVisible: true },
   { id: "life-expectancy", title: "Life expectancy", kind: "series", side: 1, color: [126, 199, 106], defaultVisible: true },
   { id: "gdp", title: "Global GDP", kind: "series", side: 1, color: [109, 165, 240], defaultVisible: true },
 ];

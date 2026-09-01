@@ -202,6 +202,22 @@ export default function TimelineApp() {
     return visibleBounds(viewState, size.width, size.height, orientation);
   }, [viewState, size, orientation, coordExtent]);
 
+  const visibleCoordRange = useMemo<[number, number] | null>(() => {
+    if (size.width <= 0 || size.height <= 0) return null;
+    return visibleTimeCoordRange(
+      viewState,
+      size.width,
+      size.height,
+      orientation,
+    );
+  }, [viewState, size, orientation]);
+
+  const visiblePerpRange = useMemo<[number, number] | null>(() => {
+    if (size.width <= 0 || size.height <= 0) return null;
+    const [minX, minY, maxX, maxY] = bounds;
+    return orientation === "horizontal" ? [minY, maxY] : [minX, maxX];
+  }, [bounds, orientation, size]);
+
   const labelBoxes = useMemo(
     () =>
       computeLabelBoxes(
@@ -359,6 +375,8 @@ export default function TimelineApp() {
               selectedId={selectedId}
               coordExtent={coordExtent}
               labelAlpha={labelAlpha}
+              visibleCoordRange={visibleCoordRange}
+              visiblePerpRange={visiblePerpRange}
               onViewStateChange={handleViewStateChange}
               onResize={handleResize}
               onSelect={(e) => setSelectedId(e ? e.id : null)}

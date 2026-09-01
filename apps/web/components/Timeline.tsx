@@ -39,6 +39,8 @@ interface TimelineProps {
   selectedId: string | null;
   coordExtent: [number, number];
   labelAlpha: Record<string, number>;
+  visibleCoordRange: [number, number] | null;
+  visiblePerpRange: [number, number] | null;
   onViewStateChange: (vs: TimeViewState) => void;
   onResize: (size: { width: number; height: number }) => void;
   onSelect: (event: TimelineEvent | null) => void;
@@ -56,6 +58,8 @@ export default function Timeline({
   selectedId,
   coordExtent,
   labelAlpha,
+  visibleCoordRange,
+  visiblePerpRange,
   onViewStateChange,
   onResize,
   onSelect,
@@ -159,7 +163,7 @@ export default function Timeline({
 
     const timeZoom = orientation === "horizontal" ? viewState.zoomX : viewState.zoomY;
 
-    const laneOptions = { orientation, scale, coordExtent, timeZoom };
+    const laneOptions = { orientation, scale, coordExtent, timeZoom, visibleCoordRange: visibleCoordRange ?? undefined, visiblePerpRange: visiblePerpRange ?? undefined };
     const laneLayers = lanes.flatMap((lane) =>
       buildLaneLayers(lane, laneBands[lane.id], laneOptions),
     );
@@ -264,6 +268,8 @@ export default function Timeline({
     selectedId,
     coordExtent,
     labelAlpha,
+    visibleCoordRange,
+    visiblePerpRange,
     viewState.zoomX,
     viewState.zoomY,
   ]);
