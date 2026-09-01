@@ -3,6 +3,7 @@
 import { useMemo } from "react";
 import DeckGL from "@deck.gl/react";
 import { OrthographicView } from "@deck.gl/core";
+import type { PickingInfo } from "@deck.gl/core";
 import { LineLayer, PolygonLayer, ScatterplotLayer } from "@deck.gl/layers";
 import type { TimelineEvent } from "../lib/types";
 import {
@@ -18,6 +19,7 @@ interface MinimapProps {
   scale: Scale;
   coordExtent: [number, number];
   visibleBounds: [number, number, number, number];
+  onNavigate: (timeCoord: number) => void;
 }
 
 const HORIZONTAL_SIZE = { width: 240, height: 56 };
@@ -30,6 +32,7 @@ export default function Minimap({
   scale,
   coordExtent,
   visibleBounds,
+  onNavigate,
 }: MinimapProps) {
   const size =
     orientation === "horizontal" ? HORIZONTAL_SIZE : VERTICAL_SIZE;
@@ -54,6 +57,13 @@ export default function Minimap({
   }, [orientation, extent, center, size.width, size.height]);
 
   const view = useMemo(() => new OrthographicView({ id: "minimap" }), []);
+
+  const handlePick = (info: PickingInfo) => {
+    const coord = info.coordinate;
+    if (!coord) return;
+    const timeCoord = orientation === "horizontal" ? coord[0] : -coord[1];
+    onNavigate(timeCoord);
+  };
 
   const layers = useMemo(() => {
     const offset = (coord: number, perp: number): [number, number, number] =>
@@ -129,6 +139,9 @@ export default function Minimap({
       controller={false}
       width={size.width}
       height={size.height}
+      onClick={handlePick}
+      onDrag={handlePick}
+      getCursor={() => "pointer"}
     />
   );
 }

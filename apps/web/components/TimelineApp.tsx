@@ -278,6 +278,13 @@ export default function TimelineApp() {
     setExpandedLaneId(null);
   }, [orientation, size, coordExtent]);
 
+  const handleMinimapNavigate = useCallback(
+    (timeCoord: number) => {
+      setTimeCenter(clampCoord(timeCoord, coordExtent));
+    },
+    [coordExtent],
+  );
+
   const toggleScale = useCallback(() => {
     const next: Scale = scale === "log" ? "linear" : "log";
     const dim = orientation === "horizontal" ? size.width : size.height;
@@ -390,6 +397,7 @@ export default function TimelineApp() {
                 scale={scale}
                 coordExtent={coordExtent}
                 visibleBounds={bounds}
+                onNavigate={handleMinimapNavigate}
               />
             </div>
           </DeckGLErrorBoundary>
