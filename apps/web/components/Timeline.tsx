@@ -52,10 +52,28 @@ function otdDotSpreadPx(dayIndex: number | undefined): number {
   return (dayIndex % 2 === 1 ? -1 : 1) * level * ON_THIS_DAY_DOT_SPREAD_PX;
 }
 
+// Cap the number of on-this-day labels shown at once: at century-level zooms
+// the visible range holds thousands of events, so a dense label cloud is
+// unreadable. Keep a random subset, but leave small sets (day-zoom) untouched.
+function sampleOtdLabelEvents(
+  events: TimelineEvent[],
+  count: number,
+): TimelineEvent[] {
+  if (events.length <= count) return events;
+  const indices = new Set<number>();
+  while (indices.size < count) {
+    indices.add(Math.floor(Math.random() * events.length));
+  }
+  return [...indices].map((i) => events[i]);
+}
+
 interface TimelineProps {
   events: TimelineEvent[];
   onThisDayEvents: TimelineEvent[];
   showOnThisDayLabels: boolean;
+  showOtdLabels: boolean;
+  otdLabelAlpha: number;
+  otdLabelSampleCount: number;
   selectedEvent: TimelineEvent | null;
   lanes: LaneDefinition[];
   laneBands: Record<LaneId, LaneBand>;
@@ -77,6 +95,9 @@ export default function Timeline({
   events,
   onThisDayEvents,
   showOnThisDayLabels,
+  showOtdLabels,
+  otdLabelAlpha,
+  otdLabelSampleCount,
   selectedEvent,
   lanes,
   laneBands,
@@ -137,21 +158,26 @@ export default function Timeline({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onThisDayEvents, visibleCoordRange, scale, selectedEvent, viewState.zoomX, viewState.zoomY, orientation]);
 
+  const otdLabelEvents = useMemo(
+    () => sampleOtdLabelEvents(onThisDayVisibleEvents, otdLabelSampleCount),
+    [onThisDayVisibleEvents, otdLabelSampleCount],
+  );
+
   const otdLabelLanes = useMemo(() => {
-    if (!showOnThisDayLabels || onThisDayVisibleEvents.length === 0) {
+    if (!showOtdLabels || otdLabelEvents.length === 0) {
       return {} as Record<string, number>;
     }
     const zoom =
       orientation === "horizontal" ? viewState.zoomX : viewState.zoomY;
     return computeOtdLabelLanes(
-      onThisDayVisibleEvents,
+      otdLabelEvents,
       zoom,
       scale,
       orientation,
     );
   }, [
-    showOnThisDayLabels,
-    onThisDayVisibleEvents,
+    showOtdLabels,
+    otdLabelEvents,
     viewState.zoomX,
     viewState.zoomY,
     scale,
@@ -247,7 +273,7 @@ export default function Timeline({
   const focusedId = hoveredId ?? centerOtdId;
 
   const focusedLabel = useMemo(() => {
-    if (!focusedId || showOnThisDayLabels || focusedId === selectedEvent?.id) {
+    if (!focusedId || showOtdLabels || focusedId === selectedEvent?.id) {
       return [];
     }
     const event = onThisDayEvents.find((e) => e.id === focusedId);
@@ -265,7 +291,7 @@ export default function Timeline({
       },
     ];
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focusedId, showOnThisDayLabels, onThisDayEvents, scale, orientation, selectedEvent, viewState.zoomX, viewState.zoomY]);
+  }, [focusedId, showOtdLabels, onThisDayEvents, scale, orientation, selectedEvent, viewState.zoomX, viewState.zoomY]);
 
   const selectionPin = useMemo(() => {
     if (!selectedEvent) return null;
@@ -502,12 +528,10 @@ export default function Timeline({
         data: onThisDayLeaderLines,
         getSourcePosition: (d) => d.source,
         getTargetPosition: (d) => d.target,
-        getColor: [...ON_THIS_DAY_COLOR, 150] as [
-          number,
-          number,
-          number,
-          number,
-        ],
+        getColor: [
+          ...ON_THIS_DAY_COLOR,
+          Math.round(150 * otdLabelAlpha),
+        ] as [number, number, number, number],
         widthUnits: "pixels",
         getWidth: 1,
         pickable: false,
@@ -520,12 +544,10 @@ export default function Timeline({
         getText: (d) => d.text,
         getTextAnchor: orientation === "horizontal" ? "middle" : "start",
         getAlignmentBaseline: "center",
-        getColor: [...ON_THIS_DAY_COLOR, 255] as [
-          number,
-          number,
-          number,
-          number,
-        ],
+        getColor: [
+          ...ON_THIS_DAY_COLOR,
+          Math.round(255 * otdLabelAlpha),
+        ] as [number, number, number, number],
         sizeUnits: "pixels",
         getSize: 12,
         fontFamily: "ui-sans-serif, system-ui, -apple-system, sans-serif",
@@ -590,6 +612,7 @@ export default function Timeline({
     events,
     onThisDayEvents,
     showOnThisDayLabels,
+    otdLabelAlpha,
     selectedEvent,
     lanes,
     laneBands,

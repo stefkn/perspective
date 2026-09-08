@@ -41,8 +41,12 @@ const Minimap = dynamic(() => import("./Minimap"), { ssr: false });
 const MAX_ZOOM = 16;
 const FIT_PAD = 1.15;
 
-const INTRO_SPAN_YEARS = 100;
+const INTRO_SPAN_YEARS = 70;
 const INTRO_DURATION_MS = 9000;
+
+const OTD_LABEL_SAMPLE_COUNT = 100;
+const OTD_LABEL_SAMPLE_COUNT_MOBILE = 15;
+const MOBILE_MAX_WIDTH = 640;
 
 function clampCoord(coord: number, extent: [number, number]): number {
   return Math.min(Math.max(coord, extent[0]), extent[1]);
@@ -111,6 +115,7 @@ export default function TimelineApp() {
   const selectedId = selectedEvent?.id ?? null;
   const [onThisDayEvents, setOnThisDayEvents] = useState<TimelineEvent[]>([]);
   const [webglSupported, setWebglSupported] = useState(true);
+  const [otdShowcaseAlpha, setOtdShowcaseAlpha] = useState(0);
 
   const [visibility, setVisibility] = useState<Record<LaneId, boolean>>(() => {
     const initial = {} as Record<LaneId, boolean>;
@@ -186,6 +191,7 @@ export default function TimelineApp() {
       end: { zoom: number; right: number },
       dim: number,
       duration: number,
+      onComplete?: () => void,
     ) => {
       animCancelRef.current?.();
       const startTime = performance.now();
@@ -205,6 +211,7 @@ export default function TimelineApp() {
           animRafRef.current = requestAnimationFrame(tick);
         } else {
           finished = true;
+          onComplete?.();
         }
       };
       animRafRef.current = requestAnimationFrame(tick);
@@ -216,8 +223,47 @@ export default function TimelineApp() {
     [],
   );
 
+  const showcaseRafRef = useRef(0);
+  const showcaseCancelRef = useRef<(() => void) | null>(null);
+
+  // Briefly surface the on-this-day labels after the intro settles, so the
+  // user sees that the dots are individual recorded events before the labels
+  // fade back out.
+  const startOtdShowcase = useCallback(() => {
+    showcaseCancelRef.current?.();
+    const FADE_MS = 600;
+    const HOLD_MS = 2400;
+    const startTime = performance.now();
+    let finished = false;
+
+    const tick = (now: number) => {
+      if (finished) return;
+      const t = now - startTime;
+      let alpha: number;
+      if (t < FADE_MS) alpha = t / FADE_MS;
+      else if (t < FADE_MS + HOLD_MS) alpha = 1;
+      else if (t < FADE_MS + HOLD_MS + FADE_MS) {
+        alpha = 1 - (t - FADE_MS - HOLD_MS) / FADE_MS;
+      } else {
+        alpha = 0;
+        finished = true;
+      }
+      setOtdShowcaseAlpha(alpha);
+      if (!finished) showcaseRafRef.current = requestAnimationFrame(tick);
+    };
+    showcaseRafRef.current = requestAnimationFrame(tick);
+    showcaseCancelRef.current = () => {
+      finished = true;
+      cancelAnimationFrame(showcaseRafRef.current);
+    };
+  }, []);
+
   useEffect(() => {
-    const cancel = () => animCancelRef.current?.();
+    const cancel = () => {
+      animCancelRef.current?.();
+      showcaseCancelRef.current?.();
+      setOtdShowcaseAlpha(0);
+    };
     window.addEventListener("wheel", cancel, { passive: true, capture: true });
     window.addEventListener("pointerdown", cancel, { capture: true });
     return () => {
@@ -246,8 +292,9 @@ export default function TimelineApp() {
       { zoom: endZoom, right: 0 },
       dim,
       INTRO_DURATION_MS,
+      startOtdShowcase,
     );
-  }, [size, orientation, coordExtent, animateView]);
+  }, [size, orientation, coordExtent, animateView, startOtdShowcase]);
 
   const viewState = useMemo<TimeViewState>(() => {
     const extent = coordExtent[1] - coordExtent[0];
@@ -288,6 +335,12 @@ export default function TimelineApp() {
   const showOnThisDayLabels =
     visibleSpanYears > 0 &&
     visibleSpanYears * 365.25 < OTD_LABEL_SPAN_DAYS;
+  const showOtdLabels = showOnThisDayLabels || otdShowcaseAlpha > 0;
+  const otdLabelAlpha = otdShowcaseAlpha > 0 ? otdShowcaseAlpha : 1;
+  const otdLabelSampleCount =
+    size.width > 0 && size.width < MOBILE_MAX_WIDTH
+      ? OTD_LABEL_SAMPLE_COUNT_MOBILE
+      : OTD_LABEL_SAMPLE_COUNT;
 
   useEffect(() => {
     if (!onThisDayActive) {
@@ -526,6 +579,9 @@ export default function TimelineApp() {
               events={EVENTS}
               onThisDayEvents={onThisDayEvents}
               showOnThisDayLabels={showOnThisDayLabels}
+              showOtdLabels={showOtdLabels}
+              otdLabelAlpha={otdLabelAlpha}
+              otdLabelSampleCount={otdLabelSampleCount}
               selectedEvent={selectedEvent}
               lanes={visibleLanes}
               laneBands={laneLayout.bands}
