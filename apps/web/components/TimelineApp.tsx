@@ -234,7 +234,7 @@ export default function TimelineApp() {
   const startOtdShowcase = useCallback(() => {
     showcaseCancelRef.current?.();
     const FADE_MS = 600;
-    const HOLD_MS = 2400;
+    const HOLD_MS = 5000;
     const startTime = performance.now();
     let finished = false;
 
@@ -286,16 +286,14 @@ export default function TimelineApp() {
     const extent = coordExtent[1] - coordExtent[0];
 
     const fitZoom = Math.log2(dim / (extent * FIT_PAD));
-    const fitRight = (extent * (FIT_PAD - 1)) / 2;
 
     const endZoom = Math.log2(dim / (INTRO_SPAN_YEARS * PIXELS_PER_LINEAR_YEAR));
 
-    // On portrait the present day sits at the top edge, so pin it there for
-    // the whole zoom instead of letting it drift inward toward the center.
-    const startRight = orientation === "horizontal" ? fitRight : 0;
-
+    // Keep the present day pinned to the far edge (right in landscape, top in
+    // portrait) for the whole zoom instead of letting it drift toward the
+    // center and back.
     animateView(
-      { zoom: fitZoom, right: startRight },
+      { zoom: fitZoom, right: 0 },
       { zoom: endZoom, right: 0 },
       dim,
       INTRO_DURATION_MS,
