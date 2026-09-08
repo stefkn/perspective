@@ -116,6 +116,7 @@ export default function TimelineApp() {
   const [onThisDayEvents, setOnThisDayEvents] = useState<TimelineEvent[]>([]);
   const [webglSupported, setWebglSupported] = useState(true);
   const [otdShowcaseAlpha, setOtdShowcaseAlpha] = useState(0);
+  const [introDone, setIntroDone] = useState(false);
 
   const [visibility, setVisibility] = useState<Record<LaneId, boolean>>(() => {
     const initial = {} as Record<LaneId, boolean>;
@@ -225,6 +226,7 @@ export default function TimelineApp() {
 
   const showcaseRafRef = useRef(0);
   const showcaseCancelRef = useRef<(() => void) | null>(null);
+  const showcaseStartedRef = useRef(false);
 
   // Briefly surface the on-this-day labels after the intro settles, so the
   // user sees that the dots are individual recorded events before the labels
@@ -262,6 +264,7 @@ export default function TimelineApp() {
     const cancel = () => {
       animCancelRef.current?.();
       showcaseCancelRef.current?.();
+      showcaseStartedRef.current = true;
       setOtdShowcaseAlpha(0);
     };
     window.addEventListener("wheel", cancel, { passive: true, capture: true });
@@ -292,9 +295,23 @@ export default function TimelineApp() {
       { zoom: endZoom, right: 0 },
       dim,
       INTRO_DURATION_MS,
-      startOtdShowcase,
+      () => setIntroDone(true),
     );
-  }, [size, orientation, coordExtent, animateView, startOtdShowcase]);
+  }, [size, orientation, coordExtent, animateView]);
+
+  // Start the label showcase once the intro has finished AND the on-this-day
+  // events have loaded, so the labels never flash over an empty view.
+  useEffect(() => {
+    if (
+      showcaseStartedRef.current ||
+      !introDone ||
+      onThisDayEvents.length === 0
+    ) {
+      return;
+    }
+    showcaseStartedRef.current = true;
+    startOtdShowcase();
+  }, [introDone, onThisDayEvents, startOtdShowcase]);
 
   const viewState = useMemo<TimeViewState>(() => {
     const extent = coordExtent[1] - coordExtent[0];
@@ -341,6 +358,12 @@ export default function TimelineApp() {
     size.width > 0 && size.width < MOBILE_MAX_WIDTH
       ? OTD_LABEL_SAMPLE_COUNT_MOBILE
       : OTD_LABEL_SAMPLE_COUNT;
+
+  // Warm the on-this-day cache at startup so the dots are ready by the time
+  // the intro zoom reaches them, even on slow mobile connections.
+  useEffect(() => {
+    loadOnThisDayEvents().catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (!onThisDayActive) {
