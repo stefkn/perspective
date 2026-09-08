@@ -52,6 +52,7 @@ export function formatPopulation(value: number): string {
 // Annual global CO2 emissions from fossil fuels and industry, in tonnes.
 // https://ourworldindata.org/co2-emissions
 export const CO2: SeriesData = [
+  { year: -3000, value: 0, estimated: true },
   { year: 1750, value: 10_000_000 },
   { year: 1800, value: 30_000_000 },
   { year: 1850, value: 200_000_000 },
@@ -70,8 +71,8 @@ export const CO2: SeriesData = [
   { year: 2023, value: 37_400_000_000 },
 ];
 
-export const CO2_MIN = Math.min(...CO2.map((p) => p.value));
-export const CO2_MAX = Math.max(...CO2.map((p) => p.value));
+export const CO2_MIN = Math.min(...CO2.filter((p) => !p.estimated).map((p) => p.value));
+export const CO2_MAX = Math.max(...CO2.filter((p) => !p.estimated).map((p) => p.value));
 
 export function formatCO2(value: number): string {
   if (value >= 1e9) return `${(value / 1e9).toFixed(1)} Gt`;
@@ -82,6 +83,7 @@ export function formatCO2(value: number): string {
 // Global average life expectancy at birth, in years.
 // https://ourworldindata.org/life-expectancy
 export const LIFE_EXPECTANCY: SeriesData = [
+  { year: -3000, value: 29, estimated: true },
   { year: 1770, value: 29 },
   { year: 1800, value: 29 },
   { year: 1850, value: 32 },
@@ -100,8 +102,8 @@ export const LIFE_EXPECTANCY: SeriesData = [
   { year: 2023, value: 73 },
 ];
 
-export const LIFE_EXPECTANCY_MIN = Math.min(...LIFE_EXPECTANCY.map((p) => p.value));
-export const LIFE_EXPECTANCY_MAX = Math.max(...LIFE_EXPECTANCY.map((p) => p.value));
+export const LIFE_EXPECTANCY_MIN = Math.min(...LIFE_EXPECTANCY.filter((p) => !p.estimated).map((p) => p.value));
+export const LIFE_EXPECTANCY_MAX = Math.max(...LIFE_EXPECTANCY.filter((p) => !p.estimated).map((p) => p.value));
 
 export function formatLifeExpectancy(value: number): string {
   return `${Math.round(value)} yrs`;
@@ -110,6 +112,7 @@ export function formatLifeExpectancy(value: number): string {
 // Global GDP, constant 2011 international dollars (PPP).
 // https://ourworldindata.org/grapher/world-gdp-over-the-last-two-millennia
 export const GDP: SeriesData = [
+  { year: -3000, value: 1e11, estimated: true },
   { year: 1800, value: 1.2e12 },
   { year: 1850, value: 2.0e12 },
   { year: 1900, value: 3.4e12 },
@@ -126,8 +129,8 @@ export const GDP: SeriesData = [
   { year: 2023, value: 1.46e14 },
 ];
 
-export const GDP_MIN = Math.min(...GDP.map((p) => p.value));
-export const GDP_MAX = Math.max(...GDP.map((p) => p.value));
+export const GDP_MIN = Math.min(...GDP.filter((p) => !p.estimated).map((p) => p.value));
+export const GDP_MAX = Math.max(...GDP.filter((p) => !p.estimated).map((p) => p.value));
 
 export function formatGDP(value: number): string {
   if (value >= 1e12) return `$${(value / 1e12).toFixed(0)} T`;

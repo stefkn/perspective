@@ -91,6 +91,7 @@ export function valueToFraction(
 export interface SeriesPoint {
   year: number;
   value: number;
+  estimated?: boolean;
 }
 
 export type SeriesData = SeriesPoint[];
@@ -101,6 +102,7 @@ export type LaneId =
   | "co2"
   | "powers"
   | "people"
+  | "culture"
   | "life-expectancy"
   | "gdp";
 
@@ -122,6 +124,7 @@ export const LANES: LaneDefinition[] = [
   { id: "co2", title: "CO2 emissions", kind: "series", side: -1, color: [226, 96, 72], defaultVisible: false },
   { id: "powers", title: "Major world powers", kind: "intervals", side: 1, color: [86, 200, 178], defaultVisible: false },
   { id: "people", title: "Notable lifespans", kind: "intervals", side: -1, color: [214, 150, 236], defaultVisible: true },
+  { id: "culture", title: "Cultural works", kind: "intervals", side: 1, color: [240, 180, 90], defaultVisible: false },
   { id: "life-expectancy", title: "Life expectancy", kind: "series", side: 1, color: [126, 199, 106], defaultVisible: false },
   { id: "gdp", title: "Global GDP", kind: "series", side: 1, color: [109, 165, 240], defaultVisible: false },
 ];

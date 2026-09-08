@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { EVENTS } from "../lib/events";
+import type { TimelineEvent } from "../lib/types";
 import {
   yearToCoord,
   coordToYear,
@@ -23,6 +24,11 @@ import {
 import { computeLabelBoxes, resolveLabelTargets } from "../lib/labels";
 import { isWebGL2Supported } from "../lib/webgl";
 import { LANES, layoutLaneBands, type LaneId } from "../lib/lanes";
+import {
+  loadOnThisDayEvents,
+  OTD_DOT_SPAN_DAYS,
+  OTD_LABEL_SPAN_DAYS,
+} from "../lib/on-this-day";
 
 import EventDetail from "./EventDetail";
 import FallbackTimeline from "./FallbackTimeline";
@@ -32,11 +38,15 @@ import LaneToggles from "./LaneToggles";
 const Timeline = dynamic(() => import("./Timeline"), { ssr: false });
 const Minimap = dynamic(() => import("./Minimap"), { ssr: false });
 
-const MAX_ZOOM = 8;
+const MAX_ZOOM = 16;
 const FIT_PAD = 1.15;
 
-const INTRO_SPAN_YEARS = 100;
+const INTRO_SPAN_YEARS = 70;
 const INTRO_DURATION_MS = 9000;
+
+const OTD_LABEL_SAMPLE_COUNT = 100;
+const OTD_LABEL_SAMPLE_COUNT_MOBILE = 15;
+const MOBILE_MAX_WIDTH = 640;
 
 function clampCoord(coord: number, extent: [number, number]): number {
   return Math.min(Math.max(coord, extent[0]), extent[1]);
@@ -99,9 +109,13 @@ export default function TimelineApp() {
   const [timeZoom, setTimeZoom] = useState(0.6);
   const [size, setSize] = useState({ width: 0, height: 0 });
   const fittedRef = useRef(false);
+  const lastViewStateRef = useRef<{ center: number; zoom: number; perp: number } | null>(null);
 
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedEvent, setSelectedEvent] = useState<TimelineEvent | null>(null);
+  const selectedId = selectedEvent?.id ?? null;
+  const [onThisDayEvents, setOnThisDayEvents] = useState<TimelineEvent[]>([]);
   const [webglSupported, setWebglSupported] = useState(true);
+  const [otdShowcaseAlpha, setOtdShowcaseAlpha] = useState(0);
 
   const [visibility, setVisibility] = useState<Record<LaneId, boolean>>(() => {
     const initial = {} as Record<LaneId, boolean>;
@@ -177,6 +191,7 @@ export default function TimelineApp() {
       end: { zoom: number; right: number },
       dim: number,
       duration: number,
+      onComplete?: () => void,
     ) => {
       animCancelRef.current?.();
       const startTime = performance.now();
@@ -196,6 +211,7 @@ export default function TimelineApp() {
           animRafRef.current = requestAnimationFrame(tick);
         } else {
           finished = true;
+          onComplete?.();
         }
       };
       animRafRef.current = requestAnimationFrame(tick);
@@ -207,8 +223,47 @@ export default function TimelineApp() {
     [],
   );
 
+  const showcaseRafRef = useRef(0);
+  const showcaseCancelRef = useRef<(() => void) | null>(null);
+
+  // Briefly surface the on-this-day labels after the intro settles, so the
+  // user sees that the dots are individual recorded events before the labels
+  // fade back out.
+  const startOtdShowcase = useCallback(() => {
+    showcaseCancelRef.current?.();
+    const FADE_MS = 600;
+    const HOLD_MS = 2400;
+    const startTime = performance.now();
+    let finished = false;
+
+    const tick = (now: number) => {
+      if (finished) return;
+      const t = now - startTime;
+      let alpha: number;
+      if (t < FADE_MS) alpha = t / FADE_MS;
+      else if (t < FADE_MS + HOLD_MS) alpha = 1;
+      else if (t < FADE_MS + HOLD_MS + FADE_MS) {
+        alpha = 1 - (t - FADE_MS - HOLD_MS) / FADE_MS;
+      } else {
+        alpha = 0;
+        finished = true;
+      }
+      setOtdShowcaseAlpha(alpha);
+      if (!finished) showcaseRafRef.current = requestAnimationFrame(tick);
+    };
+    showcaseRafRef.current = requestAnimationFrame(tick);
+    showcaseCancelRef.current = () => {
+      finished = true;
+      cancelAnimationFrame(showcaseRafRef.current);
+    };
+  }, []);
+
   useEffect(() => {
-    const cancel = () => animCancelRef.current?.();
+    const cancel = () => {
+      animCancelRef.current?.();
+      showcaseCancelRef.current?.();
+      setOtdShowcaseAlpha(0);
+    };
     window.addEventListener("wheel", cancel, { passive: true, capture: true });
     window.addEventListener("pointerdown", cancel, { capture: true });
     return () => {
@@ -237,8 +292,9 @@ export default function TimelineApp() {
       { zoom: endZoom, right: 0 },
       dim,
       INTRO_DURATION_MS,
+      startOtdShowcase,
     );
-  }, [size, orientation, coordExtent, animateView]);
+  }, [size, orientation, coordExtent, animateView, startOtdShowcase]);
 
   const viewState = useMemo<TimeViewState>(() => {
     const extent = coordExtent[1] - coordExtent[0];
@@ -256,9 +312,9 @@ export default function TimelineApp() {
     return { target: [perp, -coord], zoomX: 0, zoomY: zoom };
   }, [timeCenter, timeZoom, orientation, size, coordExtent, perpOffset, clampPerp]);
 
-  const minSignificance = useMemo(() => {
-    if (size.width <= 0 || size.height <= 0) return LOD_MAX_MIN_SIG;
-    const span = visibleYearSpan(
+  const visibleSpanYears = useMemo(() => {
+    if (size.width <= 0 || size.height <= 0) return 0;
+    return visibleYearSpan(
       viewState,
       size.width,
       size.height,
@@ -266,8 +322,43 @@ export default function TimelineApp() {
       scale,
       coordExtent,
     );
-    return spanToMinSignificance(span);
   }, [viewState, size, orientation, scale, coordExtent]);
+
+  const minSignificance = useMemo(() => {
+    if (size.width <= 0 || size.height <= 0) return LOD_MAX_MIN_SIG;
+    return spanToMinSignificance(visibleSpanYears);
+  }, [visibleSpanYears, size]);
+
+  const onThisDayActive =
+    visibleSpanYears > 0 &&
+    visibleSpanYears * 365.25 < OTD_DOT_SPAN_DAYS;
+  const showOnThisDayLabels =
+    visibleSpanYears > 0 &&
+    visibleSpanYears * 365.25 < OTD_LABEL_SPAN_DAYS;
+  const showOtdLabels = showOnThisDayLabels || otdShowcaseAlpha > 0;
+  const otdLabelAlpha = otdShowcaseAlpha > 0 ? otdShowcaseAlpha : 1;
+  const otdLabelSampleCount =
+    size.width > 0 && size.width < MOBILE_MAX_WIDTH
+      ? OTD_LABEL_SAMPLE_COUNT_MOBILE
+      : OTD_LABEL_SAMPLE_COUNT;
+
+  useEffect(() => {
+    if (!onThisDayActive) {
+      setOnThisDayEvents([]);
+      return;
+    }
+    let cancelled = false;
+    loadOnThisDayEvents()
+      .then((events) => {
+        if (!cancelled) setOnThisDayEvents(events);
+      })
+      .catch(() => {
+        if (!cancelled) setOnThisDayEvents([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [onThisDayActive]);
 
   const bounds = useMemo<[number, number, number, number]>(() => {
     if (size.width <= 0 || size.height <= 0) {
@@ -319,17 +410,39 @@ export default function TimelineApp() {
 
   const handleViewStateChange = useCallback(
     (vs: TimeViewState) => {
+      const extent = coordExtent[1] - coordExtent[0];
+      const dim = orientation === "horizontal" ? size.width : size.height;
+      const fit = dim > 0 ? Math.log2(dim / (extent * FIT_PAD)) : -Infinity;
+
+      let center: number;
+      let zoom: number;
+      let perp: number;
       if (orientation === "horizontal") {
-        setTimeCenter(vs.target[0]);
-        setTimeZoom(vs.zoomX);
-        setPerpOffset(clampPerp(vs.target[1]));
+        center = clampCoord(vs.target[0], coordExtent);
+        zoom = Math.min(Math.max(vs.zoomX, fit), MAX_ZOOM);
+        perp = clampPerp(vs.target[1]);
       } else {
-        setTimeCenter(-vs.target[1]);
-        setTimeZoom(vs.zoomY);
-        setPerpOffset(clampPerp(vs.target[0]));
+        center = clampCoord(-vs.target[1], coordExtent);
+        zoom = Math.min(Math.max(vs.zoomY, fit), MAX_ZOOM);
+        perp = clampPerp(vs.target[0]);
       }
+
+      const prev = lastViewStateRef.current;
+      if (
+        prev &&
+        Math.abs(prev.center - center) < 1e-6 &&
+        Math.abs(prev.zoom - zoom) < 1e-6 &&
+        Math.abs(prev.perp - perp) < 1e-6
+      ) {
+        return;
+      }
+      lastViewStateRef.current = { center, zoom, perp };
+
+      setTimeCenter(center);
+      setTimeZoom(zoom);
+      setPerpOffset(perp);
     },
-    [orientation, clampPerp],
+    [orientation, coordExtent, size, clampPerp],
   );
 
   const handleResize = useCallback(
@@ -412,10 +525,6 @@ export default function TimelineApp() {
     setTimeZoom(Math.log2(dim / span));
   }, [scale, timeCenter, orientation, size, viewState, coordExtent]);
 
-  const selectedEvent = selectedId
-    ? EVENTS.find((e) => e.id === selectedId) ?? null
-    : null;
-
   return (
     <div
       className={`timeline-app ${
@@ -462,26 +571,31 @@ export default function TimelineApp() {
               <FallbackTimeline
                 events={EVENTS}
                 selectedId={selectedId}
-                onSelect={(e) => setSelectedId(e ? e.id : null)}
+                onSelect={setSelectedEvent}
               />
             }
           >
             <Timeline
               events={EVENTS}
+              onThisDayEvents={onThisDayEvents}
+              showOnThisDayLabels={showOnThisDayLabels}
+              showOtdLabels={showOtdLabels}
+              otdLabelAlpha={otdLabelAlpha}
+              otdLabelSampleCount={otdLabelSampleCount}
+              selectedEvent={selectedEvent}
               lanes={visibleLanes}
               laneBands={laneLayout.bands}
               orientation={orientation}
               scale={scale}
               viewState={viewState}
               minSignificance={minSignificance}
-              selectedId={selectedId}
               coordExtent={coordExtent}
               labelAlpha={labelAlpha}
               visibleCoordRange={visibleCoordRange}
               visiblePerpRange={visiblePerpRange}
               onViewStateChange={handleViewStateChange}
               onResize={handleResize}
-              onSelect={(e) => setSelectedId(e ? e.id : null)}
+              onSelect={setSelectedEvent}
               onExpandLane={toggleExpanded}
             />
 
@@ -500,14 +614,14 @@ export default function TimelineApp() {
           <FallbackTimeline
             events={EVENTS}
             selectedId={selectedId}
-            onSelect={(e) => setSelectedId(e ? e.id : null)}
+            onSelect={setSelectedEvent}
           />
         )}
 
         {selectedEvent && (
           <EventDetail
             event={selectedEvent}
-            onClose={() => setSelectedId(null)}
+            onClose={() => setSelectedEvent(null)}
           />
         )}
       </main>
