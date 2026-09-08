@@ -2,9 +2,9 @@ import type { OnThisDayRecord, TimelineEvent } from "./types";
 import { dateToFractionalYear } from "./time-transform";
 
 // Visible span (in days) at or below which "On this day" events surface as
-// small dots, so they are discoverable from a decade-level view rather than
-// only at full day-zoom.
-export const OTD_DOT_SPAN_DAYS = 15 * 365.25;
+// small dots. Set well above the intro zoom's end span so the dots are already
+// visible when the intro settles.
+export const OTD_DOT_SPAN_DAYS = 120 * 365.25;
 
 // Visible span (in days) at or below which those events grow into labeled,
 // fully-detailed points.
