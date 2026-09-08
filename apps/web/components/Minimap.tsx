@@ -70,10 +70,10 @@ export default function Minimap({
       orientation === "horizontal" ? [coord, perp, 0] : [perp, -coord, 0];
 
     const topEvents = events
-      .filter((e) => e.significance >= 0.8)
+      .filter((e) => (e.significance ?? 0) >= 0.8)
       .map((e) => ({
         position: offset(yearToCoord(e.year, scale), 0),
-        color: significanceColor(e.significance, 0.9),
+        color: significanceColor(e.significance ?? 0, 0.9),
       }));
 
     const axis = [

@@ -17,7 +17,7 @@ const SIN45 = Math.SQRT1_2;
 let measureCtx: CanvasRenderingContext2D | null = null;
 const widthCache = new Map<string, number>();
 
-function measureWidth(text: string): number {
+export function measureWidth(text: string): number {
   const cached = widthCache.get(text);
   if (cached !== undefined) return cached;
 
@@ -85,7 +85,7 @@ export function computeLabelBoxes(
       y: p[1],
       w: measureWidth(e.title),
       h: LABEL_HEIGHT,
-      significance: e.significance,
+      significance: e.significance ?? 0,
       selected: e.id === selectedId,
     });
   }
@@ -150,4 +150,48 @@ export function resolveLabelTargets(
   }
 
   return targets;
+}
+
+// Assign perpendicular lanes to on-this-day labels so that labels whose text
+// would overlap along the time axis are staggered apart. Computed in world
+// time coordinates (the perpendicular axis is unscaled, so text extent along
+// the time axis is its pixel size divided by the zoom scale). Labels are
+// horizontal, so their extent along the time axis is their width in landscape
+// (time runs horizontally) and their height in portrait (time runs vertically).
+export function computeOtdLabelLanes(
+  events: TimelineEvent[],
+  zoom: number,
+  scale: Scale,
+  orientation: Orientation,
+): Record<string, number> {
+  const zoomScale = 2 ** zoom;
+  const padding = LABEL_PADDING_PX / zoomScale;
+
+  const items = events
+    .map((event) => {
+      const coord = yearToCoord(event.year, scale);
+      const half =
+        (orientation === "horizontal"
+          ? measureWidth(event.title)
+          : LABEL_HEIGHT) /
+        2 /
+        zoomScale;
+      return { id: event.id, start: coord - half, end: coord + half };
+    })
+    .sort((a, b) => a.start - b.start || a.end - b.end);
+
+  const laneEnds: number[] = [];
+  const lanes: Record<string, number> = {};
+
+  for (const item of items) {
+    let lane = 0;
+    while (lane < laneEnds.length && laneEnds[lane] + padding > item.start) {
+      lane++;
+    }
+    if (lane === laneEnds.length) laneEnds.push(0);
+    laneEnds[lane] = item.end;
+    lanes[item.id] = lane;
+  }
+
+  return lanes;
 }

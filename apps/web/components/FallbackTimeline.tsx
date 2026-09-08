@@ -24,7 +24,7 @@ export default function FallbackTimeline({
       </div>
       <ul className="fallback-list">
         {sorted.map((event) => {
-          const color = significanceColor(event.significance, 1);
+          const color = significanceColor(event.significance ?? 0, 1);
           const rgb = `rgb(${color[0]}, ${color[1]}, ${color[2]})`;
           const selected = event.id === selectedId;
           return (
