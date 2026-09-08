@@ -6,6 +6,7 @@ import { EVENTS } from "../lib/events";
 import {
   yearToCoord,
   coordToYear,
+  PIXELS_PER_LINEAR_YEAR,
   type Orientation,
   type Scale,
 } from "../lib/time-transform";
@@ -33,6 +34,9 @@ const Minimap = dynamic(() => import("./Minimap"), { ssr: false });
 
 const MAX_ZOOM = 8;
 const FIT_PAD = 1.15;
+
+const INTRO_SPAN_YEARS = 100;
+const INTRO_DURATION_MS = 9000;
 
 function clampCoord(coord: number, extent: [number, number]): number {
   return Math.min(Math.max(coord, extent[0]), extent[1]);
@@ -160,6 +164,81 @@ export default function TimelineApp() {
   useEffect(() => {
     setWebglSupported(isWebGL2Supported());
   }, []);
+
+  const animRafRef = useRef(0);
+  const animCancelRef = useRef<(() => void) | null>(null);
+
+  // Animate the time axis between two (zoom, rightEdge) states. The center is
+  // derived from the right edge so the view zooms toward the present instead
+  // of panning past it, keeping the motion readable.
+  const animateView = useCallback(
+    (
+      start: { zoom: number; right: number },
+      end: { zoom: number; right: number },
+      dim: number,
+      duration: number,
+    ) => {
+      animCancelRef.current?.();
+      const startTime = performance.now();
+      let finished = false;
+      const ease = (t: number) =>
+        t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+
+      const tick = (now: number) => {
+        if (finished) return;
+        const t = Math.min((now - startTime) / duration, 1);
+        const e = ease(t);
+        const zoom = start.zoom + (end.zoom - start.zoom) * e;
+        const right = start.right + (end.right - start.right) * e;
+        setTimeCenter(right - dim / (2 * Math.pow(2, zoom)));
+        setTimeZoom(zoom);
+        if (t < 1) {
+          animRafRef.current = requestAnimationFrame(tick);
+        } else {
+          finished = true;
+        }
+      };
+      animRafRef.current = requestAnimationFrame(tick);
+      animCancelRef.current = () => {
+        finished = true;
+        cancelAnimationFrame(animRafRef.current);
+      };
+    },
+    [],
+  );
+
+  useEffect(() => {
+    const cancel = () => animCancelRef.current?.();
+    window.addEventListener("wheel", cancel, { passive: true, capture: true });
+    window.addEventListener("pointerdown", cancel, { capture: true });
+    return () => {
+      window.removeEventListener("wheel", cancel, { capture: true });
+      window.removeEventListener("pointerdown", cancel, { capture: true });
+    };
+  }, []);
+
+  const introStartedRef = useRef(false);
+
+  useEffect(() => {
+    if (introStartedRef.current) return;
+    if (size.width <= 0 || size.height <= 0) return;
+    introStartedRef.current = true;
+
+    const dim = orientation === "horizontal" ? size.width : size.height;
+    const extent = coordExtent[1] - coordExtent[0];
+
+    const fitZoom = Math.log2(dim / (extent * FIT_PAD));
+    const fitRight = (extent * (FIT_PAD - 1)) / 2;
+
+    const endZoom = Math.log2(dim / (INTRO_SPAN_YEARS * PIXELS_PER_LINEAR_YEAR));
+
+    animateView(
+      { zoom: fitZoom, right: fitRight },
+      { zoom: endZoom, right: 0 },
+      dim,
+      INTRO_DURATION_MS,
+    );
+  }, [size, orientation, coordExtent, animateView]);
 
   const viewState = useMemo<TimeViewState>(() => {
     const extent = coordExtent[1] - coordExtent[0];
