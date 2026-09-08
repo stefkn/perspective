@@ -34,6 +34,10 @@ const ON_THIS_DAY_LEADER_GAP = 10;
 const ON_THIS_DAY_LABEL_EDGE_MARGIN = 120;
 const ON_THIS_DAY_DOT_SPREAD_PX = 16;
 
+// Extra perpendicular clearance for labels on portrait screens, where the
+// timeline runs vertically and labels sit to its right.
+const PORTRAIT_LABEL_CLEARANCE = 36;
+
 const LABEL_ANGLE_DEG = 45;
 
 // Alternate staggered labels above and below the axis so a cluster stays
@@ -204,7 +208,7 @@ export default function Timeline({
         }
         const shift = staggerUnits(lane) * timeSpacing;
         return {
-          position: offset(coord + shift, ON_THIS_DAY_LABEL_BASE),
+          position: offset(coord + shift, PORTRAIT_LABEL_CLEARANCE),
           text: event.title,
           event,
         };
@@ -238,7 +242,7 @@ export default function Timeline({
           source: offset(coord, 0),
           target: offset(
             coord + shift,
-            ON_THIS_DAY_LABEL_BASE - ON_THIS_DAY_LEADER_GAP,
+            PORTRAIT_LABEL_CLEARANCE - ON_THIS_DAY_LEADER_GAP,
           ),
         };
       });
@@ -285,7 +289,7 @@ export default function Timeline({
       {
         position: offset(
           yearToCoord(event.year, scale) + spread,
-          orientation === "horizontal" ? 20 : -20,
+          orientation === "horizontal" ? 20 : PORTRAIT_LABEL_CLEARANCE,
         ),
         text: event.title,
       },
@@ -339,7 +343,8 @@ export default function Timeline({
       })
       .map((event) => {
         const alpha = labelAlpha[event.id] ?? 0;
-        const perp = orientation === "horizontal" ? -18 : 18;
+        const perp =
+          orientation === "horizontal" ? -18 : PORTRAIT_LABEL_CLEARANCE;
         return {
           position: offset(yearToCoord(event.year, scale), perp),
           text: event.title,
