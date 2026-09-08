@@ -347,15 +347,31 @@ export default function TimelineApp() {
   );
 
   const resetView = useCallback(() => {
-    const extent = coordExtent[1] - coordExtent[0];
-    const dim = orientation === "horizontal" ? size.width : size.height;
-    setTimeCenter((coordExtent[0] + coordExtent[1]) / 2);
-    setTimeZoom(
-      dim > 0 ? Math.log2(dim / (extent * FIT_PAD)) : 0.6,
-    );
     setPerpOffset(0);
     setExpandedLaneId(null);
-  }, [orientation, size, coordExtent]);
+
+    const extent = coordExtent[1] - coordExtent[0];
+    const dim = orientation === "horizontal" ? size.width : size.height;
+    if (dim <= 0) return;
+
+    const fitZoom = Math.log2(dim / (extent * FIT_PAD));
+    const fitRight = (extent * (FIT_PAD - 1)) / 2;
+
+    const curZoom = Math.min(Math.max(timeZoom, fitZoom), MAX_ZOOM);
+    const curCenter = clampCoord(timeCenter, coordExtent);
+    const curRight = curCenter + dim / (2 * Math.pow(2, curZoom));
+
+    // Longer trip when zoomed further in: 3s at rest up to 10s fully zoomed.
+    const t = (curZoom - fitZoom) / Math.max(MAX_ZOOM - fitZoom, 1);
+    const duration = 3000 + t * 7000;
+
+    animateView(
+      { zoom: curZoom, right: curRight },
+      { zoom: fitZoom, right: fitRight },
+      dim,
+      duration,
+    );
+  }, [orientation, size, coordExtent, timeCenter, timeZoom, animateView]);
 
   const handleMinimapNavigate = useCallback(
     (timeCoord: number) => {
