@@ -82,7 +82,7 @@ function useAnimatedAlphas(
 
 export default function TimelineApp() {
   const [orientation, setOrientation] = useState<Orientation>("horizontal");
-  const [scale, setScale] = useState<Scale>("log");
+  const [scale, setScale] = useState<Scale>("linear");
 
   const coordExtent = useMemo<[number, number]>(
     () => computeCoordExtent(scale),
