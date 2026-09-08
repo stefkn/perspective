@@ -42,10 +42,12 @@ import {
   ENERGY_MAX,
   ENERGY_SOURCES,
   formatEnergy,
+  type EnergyPoint,
 } from "../lib/energy";
 import { PERIODS } from "../lib/periods";
 import { POWERS } from "../lib/powers";
 import { PEOPLE } from "../lib/people";
+import { CULTURE } from "../lib/culture";
 
 const MONO = "ui-monospace, SFMono-Regular, Menlo, monospace";
 const SANS = "ui-sans-serif, system-ui, -apple-system, sans-serif";
@@ -66,9 +68,16 @@ const PEOPLE_LABEL: [number, number, number, number] = [226, 190, 242, 220];
 const PEOPLE_EST_FILL: [number, number, number, number] = [214, 150, 236, 12];
 const PEOPLE_EST_STROKE: [number, number, number, number] = [222, 172, 240, 180];
 
+const CULTURE_FILL: [number, number, number, number] = [240, 180, 90, 36];
+const CULTURE_STROKE: [number, number, number, number] = [244, 196, 122, 120];
+const CULTURE_LABEL: [number, number, number, number] = [246, 210, 150, 220];
+const CULTURE_EST_FILL: [number, number, number, number] = [240, 180, 90, 12];
+const CULTURE_EST_STROKE: [number, number, number, number] = [244, 196, 122, 180];
+
 const PERIOD_THICKNESS = 8;
 const POWERS_THICKNESS = 8;
 const PEOPLE_THICKNESS = 6;
+const CULTURE_THICKNESS = 6;
 
 const DASH_EXTENSION = new PathStyleExtension({ dash: true });
 const INTERVAL_BAND: LaneBand = { center: 0, half: 0 };
@@ -94,6 +103,33 @@ function laneLabelAnchor(
     return { anchor: atNow ? "end" : "start", baseline: "center" };
   }
   return { anchor: side === -1 ? "start" : "end", baseline: "center" };
+}
+
+// Time coordinate for a lane title: sticks to the deep-past edge of the
+// visible viewport so the label stays on screen while zoomed into recent
+// history, instead of scrolling away with the timeline's start.
+function titleTimeCoord(
+  coordExtent: [number, number],
+  visibleCoordRange?: [number, number],
+): number {
+  return visibleCoordRange
+    ? Math.max(coordExtent[0], visibleCoordRange[0])
+    : coordExtent[0];
+}
+
+// Perpendicular coordinate for a lane title: clamps to the visible viewport so
+// the label for an outermost lane stays on screen instead of slipping past the
+// screen edge when the lane stack overflows.
+function titlePerpCoord(
+  perp: number,
+  visiblePerpRange?: [number, number],
+): number {
+  if (!visiblePerpRange) return perp;
+  const inset = 8;
+  return Math.min(
+    Math.max(perp, visiblePerpRange[0] + inset),
+    visiblePerpRange[1] - inset,
+  );
 }
 
 export interface LaneOptions {
@@ -142,6 +178,11 @@ interface ScreenBox {
 
 const INTERVAL_LABEL_FONT = 11;
 const INTERVAL_LABEL_HEIGHT = 13;
+// Minimum on-screen band width before a label is shown. Labels are centered
+// on the band and may overflow it (staggering + leader lines keep them
+// legible), so the band only needs to be a visible anchor, not wide enough
+// to contain the title.
+const MIN_BAND_LABEL_PX = 6;
 const STAGGER_STEP = 14;
 const STAGGER_MAX_STEPS = 6;
 const LEADER_LINE_MIN_PX = 24;
@@ -420,11 +461,7 @@ export function buildIntervalBands<T extends Interval = Interval>(
 
     const off = band.center + laneOffset(lane, thickness);
     const bandPixels = (c1 - c0) * timeScale;
-    const fits =
-      orientation === "horizontal"
-        ? bandPixels >= displayTitle.length * 7 + 12
-        : bandPixels >= 13 + 12;
-    if (!fits) continue;
+    if (bandPixels < MIN_BAND_LABEL_PX) continue;
 
     labelCandidates.push({
       id: `${id}:${interval.id}`,
@@ -513,6 +550,7 @@ export function buildIntervalBands<T extends Interval = Interval>(
       sizeUnits: "pixels",
       getSize: 11,
       fontFamily: SANS,
+      characterSet: "auto",
       pickable: false,
       parameters: { depthTest: false },
     }),
@@ -527,8 +565,8 @@ export function buildIntervalBands<T extends Interval = Interval>(
         data: [{ title }],
         getPosition: () =>
           timeOffset(
-            coordExtent[0],
-            fractionToPerp(1, band) + side * 8,
+            titleTimeCoord(coordExtent, visibleCoordRange),
+            titlePerpCoord(fractionToPerp(1, band) + side * 8, visiblePerpRange),
             orientation,
           ),
         getText: (d) => d.title,
@@ -580,16 +618,42 @@ function buildSeriesLane(
     orientation: Orientation;
     scale: Scale;
     coordExtent: [number, number];
+    visibleCoordRange?: [number, number];
+    visiblePerpRange?: [number, number];
   },
 ): Layer[] {
-  const { id, title, color, data, min, max, format, band, orientation, scale, coordExtent } =
-    cfg;
+  const {
+    id,
+    title,
+    color,
+    data,
+    min,
+    max,
+    format,
+    band,
+    orientation,
+    scale,
+    coordExtent,
+    visibleCoordRange,
+    visiblePerpRange,
+  } = cfg;
   const side = band.center >= 0 ? 1 : -1;
 
   const perpFor = (value: number) =>
     fractionToPerp(valueToFraction(value, min, max, scale), band);
 
-  const path: [number, number, number][] = data.map((p) =>
+  // Leading estimated points (before the first measured year) are drawn as a
+  // dashed extrapolation; everything from the first measured point onward is
+  // the solid, filled series.
+  const firstRealIndex = data.findIndex((p) => !p.estimated);
+  const realPoints = firstRealIndex > 0 ? data.slice(firstRealIndex) : data;
+  const estimatedPoints =
+    firstRealIndex > 0 ? [...data.slice(0, firstRealIndex), realPoints[0]] : [];
+
+  const path: [number, number, number][] = realPoints.map((p) =>
+    timeOffset(yearToCoord(p.year, scale), perpFor(p.value), orientation),
+  );
+  const estimatedPath: [number, number, number][] = estimatedPoints.map((p) =>
     timeOffset(yearToCoord(p.year, scale), perpFor(p.value), orientation),
   );
 
@@ -600,9 +664,9 @@ function buildSeriesLane(
 
   const baseline = fractionToPerp(0, band);
   const areaPolygon: [number, number][] = [
-    xy(yearToCoord(data[0].year, scale), baseline),
-    ...data.map((p) => xy(yearToCoord(p.year, scale), perpFor(p.value))),
-    xy(yearToCoord(data[data.length - 1].year, scale), baseline),
+    xy(yearToCoord(realPoints[0].year, scale), baseline),
+    ...realPoints.map((p) => xy(yearToCoord(p.year, scale), perpFor(p.value))),
+    xy(yearToCoord(realPoints[realPoints.length - 1].year, scale), baseline),
   ];
 
   const outerPerp = fractionToPerp(1, band);
@@ -620,6 +684,12 @@ function buildSeriesLane(
     color[2],
     28,
   ];
+  const estimateColor: [number, number, number, number] = [
+    color[0],
+    color[1],
+    color[2],
+    170,
+  ];
 
   const titleAnchor = laneLabelAnchor(orientation, side, false);
   const maxAnchor = laneLabelAnchor(orientation, side, true);
@@ -627,14 +697,18 @@ function buildSeriesLane(
 
   const labels: LaneLabel[] = [
     {
-      position: timeOffset(coordExtent[0], outerPerp + side * 8, orientation),
+      position: timeOffset(
+        titleTimeCoord(coordExtent, visibleCoordRange),
+        titlePerpCoord(outerPerp + side * 8, visiblePerpRange),
+        orientation,
+      ),
       text: title,
       anchor: titleAnchor.anchor,
       baseline: titleAnchor.baseline,
     },
     {
       position: timeOffset(
-        yearToCoord(data[data.length - 1].year, scale),
+        yearToCoord(realPoints[realPoints.length - 1].year, scale),
         outerPerp + side * 8,
         orientation,
       ),
@@ -644,7 +718,7 @@ function buildSeriesLane(
     },
     {
       position: timeOffset(
-        yearToCoord(data[0].year, scale),
+        yearToCoord(realPoints[0].year, scale),
         innerPerp - side * 8,
         orientation,
       ),
@@ -674,6 +748,22 @@ function buildSeriesLane(
       pickable: true,
       parameters: { depthTest: false },
     }),
+    ...(estimatedPath.length
+      ? [
+          new PathLayer({
+            id: `${id}-estimated`,
+            data: [{ path: estimatedPath, laneId: id }],
+            getPath: (d) => d.path,
+            getColor: estimateColor,
+            widthUnits: "pixels",
+            getWidth: 2,
+            extensions: [DASH_EXTENSION],
+            getDashArray: [6, 4] as [number, number],
+            pickable: false,
+            parameters: { depthTest: false },
+          }),
+        ]
+      : []),
     new TextLayer({
       id: `${id}-labels`,
       data: labels,
@@ -697,13 +787,18 @@ function buildEnergyLane(
     orientation: Orientation;
     scale: Scale;
     coordExtent: [number, number];
+    visibleCoordRange?: [number, number];
+    visiblePerpRange?: [number, number];
   },
 ): Layer[] {
-  const { band, orientation, scale, coordExtent } = cfg;
+  const { band, orientation, scale, coordExtent, visibleCoordRange, visiblePerpRange } = cfg;
   const side = band.center >= 0 ? 1 : -1;
 
   const perpFor = (value: number) =>
     fractionToPerp(valueToFraction(value, ENERGY_MIN, ENERGY_MAX, scale), band);
+
+  const totalOf = (p: EnergyPoint) =>
+    ENERGY_SOURCES.reduce((sum, s) => sum + p.values[s.id], 0);
 
   const xy = (coord: number, perp: number): [number, number] => {
     const [x, y] = timeOffset(coord, perp, orientation);
@@ -746,6 +841,16 @@ function buildEnergyLane(
     }
   }
 
+  // Extrapolated total back to the timeline's start, drawn as a dashed line
+  // (every source in this dataset was ~0 before the industrial era).
+  const firstRealIndex = ENERGY.findIndex((p) => !p.estimated);
+  const estimatedEnergyPath: [number, number, number][] =
+    firstRealIndex > 0
+      ? [...ENERGY.slice(0, firstRealIndex), ENERGY[firstRealIndex]].map((p) =>
+          timeOffset(yearToCoord(p.year, scale), perpFor(totalOf(p)), orientation),
+        )
+      : [];
+
   // Legend labels at the latest year, centered within each source's band.
   const last = ENERGY[ENERGY.length - 1];
   const lastCoord = yearToCoord(last.year, scale);
@@ -772,7 +877,11 @@ function buildEnergyLane(
   const totalAnchor = laneLabelAnchor(orientation, side, true);
   const headerLabels: LaneLabel[] = [
     {
-      position: timeOffset(coordExtent[0], outerPerp + side * 8, orientation),
+      position: timeOffset(
+        titleTimeCoord(coordExtent, visibleCoordRange),
+        titlePerpCoord(outerPerp + side * 8, visiblePerpRange),
+        orientation,
+      ),
       text: "Primary energy",
       anchor: titleAnchor.anchor,
       baseline: titleAnchor.baseline,
@@ -799,6 +908,22 @@ function buildEnergyLane(
       pickable: true,
       parameters: { depthTest: false },
     }),
+    ...(estimatedEnergyPath.length
+      ? [
+          new PathLayer({
+            id: "energy-estimated",
+            data: [{ path: estimatedEnergyPath, laneId: "energy" }],
+            getPath: (d) => d.path,
+            getColor: [220, 220, 230, 170],
+            widthUnits: "pixels",
+            getWidth: 2,
+            extensions: [DASH_EXTENSION],
+            getDashArray: [6, 4] as [number, number],
+            pickable: false,
+            parameters: { depthTest: false },
+          }),
+        ]
+      : []),
     new TextLayer({
       id: "energy-legend",
       data: legendLabels,
@@ -869,6 +994,28 @@ export function buildLaneLayers(
       dashedEstimated: true,
       title: "Notable lifespans",
       laneId: "people",
+      visibleCoordRange: opts.visibleCoordRange,
+      visiblePerpRange: opts.visiblePerpRange,
+    });
+  }
+  if (lane.id === "culture") {
+    return buildIntervalBands({
+      id: "culture",
+      assigned: assignIntervalLanes(CULTURE),
+      orientation: opts.orientation,
+      scale: opts.scale,
+      coordExtent: opts.coordExtent,
+      band,
+      thickness: CULTURE_THICKNESS,
+      timeZoom: opts.timeZoom,
+      fillColor: CULTURE_FILL,
+      strokeColor: CULTURE_STROKE,
+      labelColor: CULTURE_LABEL,
+      estimateFillColor: CULTURE_EST_FILL,
+      estimateStrokeColor: CULTURE_EST_STROKE,
+      dashedEstimated: true,
+      title: "Cultural works",
+      laneId: "culture",
       visibleCoordRange: opts.visibleCoordRange,
       visiblePerpRange: opts.visiblePerpRange,
     });
