@@ -290,8 +290,12 @@ export default function TimelineApp() {
 
     const endZoom = Math.log2(dim / (INTRO_SPAN_YEARS * PIXELS_PER_LINEAR_YEAR));
 
+    // On portrait the present day sits at the top edge, so pin it there for
+    // the whole zoom instead of letting it drift inward toward the center.
+    const startRight = orientation === "horizontal" ? fitRight : 0;
+
     animateView(
-      { zoom: fitZoom, right: fitRight },
+      { zoom: fitZoom, right: startRight },
       { zoom: endZoom, right: 0 },
       dim,
       INTRO_DURATION_MS,
