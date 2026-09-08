@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { EVENTS } from "../lib/events";
+import type { TimelineEvent } from "../lib/types";
 import {
   yearToCoord,
   coordToYear,
@@ -23,6 +24,11 @@ import {
 import { computeLabelBoxes, resolveLabelTargets } from "../lib/labels";
 import { isWebGL2Supported } from "../lib/webgl";
 import { LANES, layoutLaneBands, type LaneId } from "../lib/lanes";
+import {
+  loadOnThisDayEvents,
+  OTD_DOT_SPAN_DAYS,
+  OTD_LABEL_SPAN_DAYS,
+} from "../lib/on-this-day";
 
 import EventDetail from "./EventDetail";
 import FallbackTimeline from "./FallbackTimeline";
@@ -32,7 +38,7 @@ import LaneToggles from "./LaneToggles";
 const Timeline = dynamic(() => import("./Timeline"), { ssr: false });
 const Minimap = dynamic(() => import("./Minimap"), { ssr: false });
 
-const MAX_ZOOM = 8;
+const MAX_ZOOM = 16;
 const FIT_PAD = 1.15;
 
 const INTRO_SPAN_YEARS = 100;
@@ -99,8 +105,11 @@ export default function TimelineApp() {
   const [timeZoom, setTimeZoom] = useState(0.6);
   const [size, setSize] = useState({ width: 0, height: 0 });
   const fittedRef = useRef(false);
+  const lastViewStateRef = useRef<{ center: number; zoom: number; perp: number } | null>(null);
 
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedEvent, setSelectedEvent] = useState<TimelineEvent | null>(null);
+  const selectedId = selectedEvent?.id ?? null;
+  const [onThisDayEvents, setOnThisDayEvents] = useState<TimelineEvent[]>([]);
   const [webglSupported, setWebglSupported] = useState(true);
 
   const [visibility, setVisibility] = useState<Record<LaneId, boolean>>(() => {
@@ -256,9 +265,9 @@ export default function TimelineApp() {
     return { target: [perp, -coord], zoomX: 0, zoomY: zoom };
   }, [timeCenter, timeZoom, orientation, size, coordExtent, perpOffset, clampPerp]);
 
-  const minSignificance = useMemo(() => {
-    if (size.width <= 0 || size.height <= 0) return LOD_MAX_MIN_SIG;
-    const span = visibleYearSpan(
+  const visibleSpanYears = useMemo(() => {
+    if (size.width <= 0 || size.height <= 0) return 0;
+    return visibleYearSpan(
       viewState,
       size.width,
       size.height,
@@ -266,8 +275,37 @@ export default function TimelineApp() {
       scale,
       coordExtent,
     );
-    return spanToMinSignificance(span);
   }, [viewState, size, orientation, scale, coordExtent]);
+
+  const minSignificance = useMemo(() => {
+    if (size.width <= 0 || size.height <= 0) return LOD_MAX_MIN_SIG;
+    return spanToMinSignificance(visibleSpanYears);
+  }, [visibleSpanYears, size]);
+
+  const onThisDayActive =
+    visibleSpanYears > 0 &&
+    visibleSpanYears * 365.25 < OTD_DOT_SPAN_DAYS;
+  const showOnThisDayLabels =
+    visibleSpanYears > 0 &&
+    visibleSpanYears * 365.25 < OTD_LABEL_SPAN_DAYS;
+
+  useEffect(() => {
+    if (!onThisDayActive) {
+      setOnThisDayEvents([]);
+      return;
+    }
+    let cancelled = false;
+    loadOnThisDayEvents()
+      .then((events) => {
+        if (!cancelled) setOnThisDayEvents(events);
+      })
+      .catch(() => {
+        if (!cancelled) setOnThisDayEvents([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [onThisDayActive]);
 
   const bounds = useMemo<[number, number, number, number]>(() => {
     if (size.width <= 0 || size.height <= 0) {
@@ -319,17 +357,39 @@ export default function TimelineApp() {
 
   const handleViewStateChange = useCallback(
     (vs: TimeViewState) => {
+      const extent = coordExtent[1] - coordExtent[0];
+      const dim = orientation === "horizontal" ? size.width : size.height;
+      const fit = dim > 0 ? Math.log2(dim / (extent * FIT_PAD)) : -Infinity;
+
+      let center: number;
+      let zoom: number;
+      let perp: number;
       if (orientation === "horizontal") {
-        setTimeCenter(vs.target[0]);
-        setTimeZoom(vs.zoomX);
-        setPerpOffset(clampPerp(vs.target[1]));
+        center = clampCoord(vs.target[0], coordExtent);
+        zoom = Math.min(Math.max(vs.zoomX, fit), MAX_ZOOM);
+        perp = clampPerp(vs.target[1]);
       } else {
-        setTimeCenter(-vs.target[1]);
-        setTimeZoom(vs.zoomY);
-        setPerpOffset(clampPerp(vs.target[0]));
+        center = clampCoord(-vs.target[1], coordExtent);
+        zoom = Math.min(Math.max(vs.zoomY, fit), MAX_ZOOM);
+        perp = clampPerp(vs.target[0]);
       }
+
+      const prev = lastViewStateRef.current;
+      if (
+        prev &&
+        Math.abs(prev.center - center) < 1e-6 &&
+        Math.abs(prev.zoom - zoom) < 1e-6 &&
+        Math.abs(prev.perp - perp) < 1e-6
+      ) {
+        return;
+      }
+      lastViewStateRef.current = { center, zoom, perp };
+
+      setTimeCenter(center);
+      setTimeZoom(zoom);
+      setPerpOffset(perp);
     },
-    [orientation, clampPerp],
+    [orientation, coordExtent, size, clampPerp],
   );
 
   const handleResize = useCallback(
@@ -412,10 +472,6 @@ export default function TimelineApp() {
     setTimeZoom(Math.log2(dim / span));
   }, [scale, timeCenter, orientation, size, viewState, coordExtent]);
 
-  const selectedEvent = selectedId
-    ? EVENTS.find((e) => e.id === selectedId) ?? null
-    : null;
-
   return (
     <div
       className={`timeline-app ${
@@ -462,26 +518,28 @@ export default function TimelineApp() {
               <FallbackTimeline
                 events={EVENTS}
                 selectedId={selectedId}
-                onSelect={(e) => setSelectedId(e ? e.id : null)}
+                onSelect={setSelectedEvent}
               />
             }
           >
             <Timeline
               events={EVENTS}
+              onThisDayEvents={onThisDayEvents}
+              showOnThisDayLabels={showOnThisDayLabels}
+              selectedEvent={selectedEvent}
               lanes={visibleLanes}
               laneBands={laneLayout.bands}
               orientation={orientation}
               scale={scale}
               viewState={viewState}
               minSignificance={minSignificance}
-              selectedId={selectedId}
               coordExtent={coordExtent}
               labelAlpha={labelAlpha}
               visibleCoordRange={visibleCoordRange}
               visiblePerpRange={visiblePerpRange}
               onViewStateChange={handleViewStateChange}
               onResize={handleResize}
-              onSelect={(e) => setSelectedId(e ? e.id : null)}
+              onSelect={setSelectedEvent}
               onExpandLane={toggleExpanded}
             />
 
@@ -500,14 +558,14 @@ export default function TimelineApp() {
           <FallbackTimeline
             events={EVENTS}
             selectedId={selectedId}
-            onSelect={(e) => setSelectedId(e ? e.id : null)}
+            onSelect={setSelectedEvent}
           />
         )}
 
         {selectedEvent && (
           <EventDetail
             event={selectedEvent}
-            onClose={() => setSelectedId(null)}
+            onClose={() => setSelectedEvent(null)}
           />
         )}
       </main>
