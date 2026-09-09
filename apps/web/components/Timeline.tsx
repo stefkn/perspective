@@ -20,7 +20,12 @@ import { opacityForSignificance, significanceColor } from "../lib/significance";
 import { generateTicks } from "../lib/ticks";
 import type { LaneBand, LaneDefinition, LaneId } from "../lib/lanes";
 import { buildPeriodBands, buildLaneLayers } from "./lane-layers";
-import { computeOtdLabelLanes } from "../lib/labels";
+import {
+  computeOtdLabelLanes,
+  otdPerpOffset,
+  otdTimeShiftPx,
+  PORTRAIT_LABEL_CLEARANCE,
+} from "../lib/labels";
 import type { TimeViewState } from "../lib/view-state";
 
 const AXIS_COLOR: [number, number, number] = [0x39, 0x41, 0x4d];
@@ -28,25 +33,11 @@ const TICK_COLOR: [number, number, number] = [0x8a, 0x93, 0xa6];
 const NOW_COLOR: [number, number, number] = [0x7f, 0xd1, 0xff];
 const ON_THIS_DAY_COLOR: [number, number, number] = [0x4f, 0xd1, 0xc5];
 const ON_THIS_DAY_HIT_RADIUS = 14;
-const ON_THIS_DAY_LABEL_BASE = 20;
-const ON_THIS_DAY_LABEL_SPACING = 16;
 const ON_THIS_DAY_LEADER_GAP = 10;
 const ON_THIS_DAY_LABEL_EDGE_MARGIN = 120;
 const ON_THIS_DAY_DOT_SPREAD_PX = 16;
 
-// Extra perpendicular clearance for labels on portrait screens, where the
-// timeline runs vertically and labels sit to its right.
-const PORTRAIT_LABEL_CLEARANCE = 36;
-
 const LABEL_ANGLE_DEG = 45;
-
-// Alternate staggered labels above and below the axis so a cluster stays
-// compact: lane 0 -> 0, lane 1 -> -1, lane 2 -> +1, lane 3 -> -2, ...
-function staggerUnits(lane: number): number {
-  if (lane <= 0) return 0;
-  const level = Math.floor((lane + 1) / 2);
-  return (lane % 2 === 1 ? -1 : 1) * level;
-}
 
 // Spread coincident (same-day) dots slightly apart in time so each is
 // individually selectable: index 0 -> 0, 1 -> -1, 2 -> +1, 3 -> -2, ...
@@ -202,7 +193,6 @@ export default function Timeline({
     const zoom =
       orientation === "horizontal" ? viewState.zoomX : viewState.zoomY;
     const zoomScale = Math.pow(2, zoom);
-    const timeSpacing = ON_THIS_DAY_LABEL_SPACING / zoomScale;
     return onThisDayVisibleEvents
       .filter((event) => otdLabelLanes[event.id] != null)
       .map((event) => {
@@ -211,12 +201,10 @@ export default function Timeline({
           otdDotSpreadPx(event.dayIndex) / zoomScale;
         const lane = otdLabelLanes[event.id];
         if (orientation === "horizontal") {
-          const level = Math.floor(lane / 2);
-          const dir = lane % 2 === 0 ? -1 : 1;
-          const perp = dir * (ON_THIS_DAY_LABEL_BASE + level * ON_THIS_DAY_LABEL_SPACING);
+          const perp = otdPerpOffset(lane);
           return { position: offset(coord, perp), text: event.title, event };
         }
-        const shift = staggerUnits(lane) * timeSpacing;
+        const shift = otdTimeShiftPx(lane) / zoomScale;
         return {
           position: offset(coord + shift, PORTRAIT_LABEL_CLEARANCE),
           text: event.title,
@@ -230,7 +218,6 @@ export default function Timeline({
     const zoom =
       orientation === "horizontal" ? viewState.zoomX : viewState.zoomY;
     const zoomScale = Math.pow(2, zoom);
-    const timeSpacing = ON_THIS_DAY_LABEL_SPACING / zoomScale;
     return onThisDayVisibleEvents
       .filter((event) => otdLabelLanes[event.id] != null)
       .map((event) => {
@@ -239,15 +226,14 @@ export default function Timeline({
           otdDotSpreadPx(event.dayIndex) / zoomScale;
         const lane = otdLabelLanes[event.id];
         if (orientation === "horizontal") {
-          const level = Math.floor(lane / 2);
-          const dir = lane % 2 === 0 ? -1 : 1;
-          const perp = dir * (ON_THIS_DAY_LABEL_BASE + level * ON_THIS_DAY_LABEL_SPACING);
+          const perp = otdPerpOffset(lane);
+          const dir = perp >= 0 ? 1 : -1;
           return {
             source: offset(coord, 0),
             target: offset(coord, perp - dir * ON_THIS_DAY_LEADER_GAP),
           };
         }
-        const shift = staggerUnits(lane) * timeSpacing;
+        const shift = otdTimeShiftPx(lane) / zoomScale;
         return {
           source: offset(coord, 0),
           target: offset(
