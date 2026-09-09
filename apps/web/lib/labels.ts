@@ -22,6 +22,7 @@ export const OTD_LABEL_STEP = OTD_LABEL_HEIGHT + OTD_LABEL_GAP;
 const OTD_LABEL_PAD_X = 6;
 export const OTD_LABEL_BASE = 20;
 export const PORTRAIT_LABEL_CLEARANCE = 36;
+export const OTD_DOT_SPREAD_PX = 16;
 
 const COS45 = Math.SQRT1_2;
 const SIN45 = Math.SQRT1_2;
@@ -185,6 +186,13 @@ export function otdTimeShiftPx(lane: number): number {
   return staggerUnits(lane) * OTD_LABEL_STEP;
 }
 
+// Spread coincident (same-day) dots slightly apart in time so each is
+// individually selectable: index 0 -> 0, 1 -> -1, 2 -> +1, 3 -> -2, ...
+export function otdDotSpreadPx(dayIndex: number | undefined): number {
+  if (!dayIndex || dayIndex <= 0) return 0;
+  return staggerUnits(dayIndex) * OTD_DOT_SPREAD_PX;
+}
+
 // Assign lanes to on-this-day labels so no two rendered labels overlap. Lanes
 // are chosen greedily in time order, but the overlap test uses the label's
 // *staggered* position rather than just its raw time extent. This matters in
@@ -204,7 +212,9 @@ export function computeOtdLabelLanes(
 
   const items = events
     .map((event) => {
-      const coord = yearToCoord(event.year, scale);
+      const coord =
+        yearToCoord(event.year, scale) +
+        otdDotSpreadPx(event.dayIndex) / zoomScale;
       return {
         id: event.id,
         t: coord * zoomScale,

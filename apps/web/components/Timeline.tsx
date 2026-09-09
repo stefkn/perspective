@@ -22,6 +22,7 @@ import type { LaneBand, LaneDefinition, LaneId } from "../lib/lanes";
 import { buildPeriodBands, buildLaneLayers } from "./lane-layers";
 import {
   computeOtdLabelLanes,
+  otdDotSpreadPx,
   otdPerpOffset,
   otdTimeShiftPx,
   PORTRAIT_LABEL_CLEARANCE,
@@ -35,17 +36,8 @@ const ON_THIS_DAY_COLOR: [number, number, number] = [0x4f, 0xd1, 0xc5];
 const ON_THIS_DAY_HIT_RADIUS = 14;
 const ON_THIS_DAY_LEADER_GAP = 10;
 const ON_THIS_DAY_LABEL_EDGE_MARGIN = 120;
-const ON_THIS_DAY_DOT_SPREAD_PX = 16;
 
 const LABEL_ANGLE_DEG = 45;
-
-// Spread coincident (same-day) dots slightly apart in time so each is
-// individually selectable: index 0 -> 0, 1 -> -1, 2 -> +1, 3 -> -2, ...
-function otdDotSpreadPx(dayIndex: number | undefined): number {
-  if (!dayIndex || dayIndex <= 0) return 0;
-  const level = Math.floor((dayIndex + 1) / 2);
-  return (dayIndex % 2 === 1 ? -1 : 1) * level * ON_THIS_DAY_DOT_SPREAD_PX;
-}
 
 // Cap the number of on-this-day labels shown at once: at century-level zooms
 // the visible range holds thousands of events, so a dense label cloud is
