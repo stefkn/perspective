@@ -11,6 +11,19 @@ export const LABEL_HEIGHT = LABEL_FONT_SIZE * 1.2;
 const LABEL_PADDING_PX = 6;
 const OFF_SCREEN_MARGIN = 300;
 
+// On-this-day labels render at a slightly smaller size than the main event
+// labels. Their vertical extent and the gap between adjacent labels drive the
+// lane staggering, so they are kept here (in pixels) rather than spread across
+// the renderer.
+export const OTD_LABEL_FONT_SIZE = 12;
+export const OTD_LABEL_HEIGHT = OTD_LABEL_FONT_SIZE * 1.2;
+const OTD_LABEL_GAP = 4;
+export const OTD_LABEL_STEP = OTD_LABEL_HEIGHT + OTD_LABEL_GAP;
+const OTD_LABEL_PAD_X = 6;
+export const OTD_LABEL_BASE = 20;
+export const PORTRAIT_LABEL_CLEARANCE = 36;
+export const OTD_DOT_SPREAD_PX = 16;
+
 const COS45 = Math.SQRT1_2;
 const SIN45 = Math.SQRT1_2;
 
@@ -152,12 +165,43 @@ export function resolveLabelTargets(
   return targets;
 }
 
-// Assign perpendicular lanes to on-this-day labels so that labels whose text
-// would overlap along the time axis are staggered apart. Computed in world
-// time coordinates (the perpendicular axis is unscaled, so text extent along
-// the time axis is its pixel size divided by the zoom scale). Labels are
-// horizontal, so their extent along the time axis is their width in landscape
-// (time runs horizontally) and their height in portrait (time runs vertically).
+// Alternate staggered labels above and below the axis so a cluster stays
+// compact: lane 0 -> 0, lane 1 -> -1, lane 2 -> +1, lane 3 -> -2, ...
+export function staggerUnits(lane: number): number {
+  if (lane <= 0) return 0;
+  const level = Math.floor((lane + 1) / 2);
+  return (lane % 2 === 1 ? -1 : 1) * level;
+}
+
+// Perpendicular offset (in pixels) of a landscape on-this-day label for a
+// lane: labels alternate above and below the axis and stack outward.
+export function otdPerpOffset(lane: number): number {
+  const level = Math.floor(lane / 2);
+  const dir = lane % 2 === 0 ? -1 : 1;
+  return dir * (OTD_LABEL_BASE + level * OTD_LABEL_STEP);
+}
+
+// Time-axis shift (in pixels) of a portrait on-this-day label for a lane.
+export function otdTimeShiftPx(lane: number): number {
+  return staggerUnits(lane) * OTD_LABEL_STEP;
+}
+
+// Spread coincident (same-day) dots slightly apart in time so each is
+// individually selectable: index 0 -> 0, 1 -> -1, 2 -> +1, 3 -> -2, ...
+export function otdDotSpreadPx(dayIndex: number | undefined): number {
+  if (!dayIndex || dayIndex <= 0) return 0;
+  return staggerUnits(dayIndex) * OTD_DOT_SPREAD_PX;
+}
+
+// Assign lanes to on-this-day labels so no two rendered labels overlap. Lanes
+// are chosen greedily in time order, but the overlap test uses the label's
+// *staggered* position rather than just its raw time extent. This matters in
+// portrait, where the stagger shifts labels along the time axis and can land
+// one label on top of a neighbour in a different lane.
+//
+// All sizes are expressed in screen pixels: the time coordinate is scaled by
+// the zoom while the perpendicular offset and the label height are already
+// pixel-sized, so collisions are checked in a single consistent space.
 export function computeOtdLabelLanes(
   events: TimelineEvent[],
   zoom: number,
@@ -165,31 +209,52 @@ export function computeOtdLabelLanes(
   orientation: Orientation,
 ): Record<string, number> {
   const zoomScale = 2 ** zoom;
-  const padding = LABEL_PADDING_PX / zoomScale;
 
   const items = events
     .map((event) => {
-      const coord = yearToCoord(event.year, scale);
-      const half =
-        (orientation === "horizontal"
-          ? measureWidth(event.title)
-          : LABEL_HEIGHT) /
-        2 /
-        zoomScale;
-      return { id: event.id, start: coord - half, end: coord + half };
+      const coord =
+        yearToCoord(event.year, scale) +
+        otdDotSpreadPx(event.dayIndex) / zoomScale;
+      return {
+        id: event.id,
+        t: coord * zoomScale,
+        w: orientation === "horizontal" ? measureWidth(event.title) : 0,
+      };
     })
-    .sort((a, b) => a.start - b.start || a.end - b.end);
+    .sort((a, b) => a.t - b.t || (a.id < b.id ? -1 : 1));
 
-  const laneEnds: number[] = [];
+  const placed: Array<{ t: number; perp: number; w: number }> = [];
   const lanes: Record<string, number> = {};
 
   for (const item of items) {
     let lane = 0;
-    while (lane < laneEnds.length && laneEnds[lane] + padding > item.start) {
-      lane++;
+    for (;; lane++) {
+      const t =
+        orientation === "horizontal"
+          ? item.t
+          : item.t + otdTimeShiftPx(lane);
+      const perp =
+        orientation === "horizontal" ? otdPerpOffset(lane) : PORTRAIT_LABEL_CLEARANCE;
+
+      let collides = false;
+      for (const p of placed) {
+        if (orientation === "horizontal") {
+          const xGap = (item.w + p.w) / 2 + OTD_LABEL_PAD_X;
+          if (Math.abs(t - p.t) < xGap && Math.abs(perp - p.perp) < OTD_LABEL_STEP) {
+            collides = true;
+            break;
+          }
+        } else if (Math.abs(t - p.t) < OTD_LABEL_STEP) {
+          collides = true;
+          break;
+        }
+      }
+
+      if (!collides) {
+        placed.push({ t, perp, w: item.w });
+        break;
+      }
     }
-    if (lane === laneEnds.length) laneEnds.push(0);
-    laneEnds[lane] = item.end;
     lanes[item.id] = lane;
   }
 
