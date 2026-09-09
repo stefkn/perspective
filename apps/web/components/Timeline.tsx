@@ -58,17 +58,27 @@ function otdDotSpreadPx(dayIndex: number | undefined): number {
 
 // Cap the number of on-this-day labels shown at once: at century-level zooms
 // the visible range holds thousands of events, so a dense label cloud is
-// unreadable. Keep a random subset, but leave small sets (day-zoom) untouched.
+// unreadable. Keep a deterministic subset keyed on each event's id, so the
+// chosen labels stay put while panning instead of reshuffling every frame.
+function hashString(text: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
 function sampleOtdLabelEvents(
   events: TimelineEvent[],
   count: number,
 ): TimelineEvent[] {
   if (events.length <= count) return events;
-  const indices = new Set<number>();
-  while (indices.size < count) {
-    indices.add(Math.floor(Math.random() * events.length));
-  }
-  return [...indices].map((i) => events[i]);
+  return events
+    .map((event, index) => ({ event, index, hash: hashString(event.id) }))
+    .sort((a, b) => a.hash - b.hash || a.index - b.index)
+    .slice(0, count)
+    .map((entry) => entry.event);
 }
 
 interface TimelineProps {
