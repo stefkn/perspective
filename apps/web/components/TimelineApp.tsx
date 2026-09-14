@@ -1,6 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import dynamic from "next/dynamic";
 import { EVENTS } from "../lib/events";
 import type { TimelineEvent } from "../lib/types";
@@ -171,7 +178,7 @@ export default function TimelineApp() {
   // never starts with the stale "horizontal" default. In the passive-effects
   // flush, the intro effect can otherwise run against the wrong axis length on
   // a portrait phone, which offsets the pinned present day toward the center.
-  useEffect(() => {
+  useLayoutEffect(() => {
     const update = () =>
       setOrientation(
         window.innerWidth >= window.innerHeight ? "horizontal" : "vertical",
