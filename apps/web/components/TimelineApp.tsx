@@ -115,6 +115,7 @@ export default function TimelineApp() {
   const selectedId = selectedEvent?.id ?? null;
   const [onThisDayEvents, setOnThisDayEvents] = useState<TimelineEvent[]>([]);
   const [webglSupported, setWebglSupported] = useState(true);
+  const [timelineReady, setTimelineReady] = useState(false);
   const [otdShowcaseAlpha, setOtdShowcaseAlpha] = useState(0);
   const [introDone, setIntroDone] = useState(false);
 
@@ -166,6 +167,10 @@ export default function TimelineApp() {
     setPerpOffset((p) => clampPerp(p));
   }, [clampPerp]);
 
+  // Detect orientation before paint (useLayoutEffect) so the intro animation
+  // never starts with the stale "horizontal" default. In the passive-effects
+  // flush, the intro effect can otherwise run against the wrong axis length on
+  // a portrait phone, which offsets the pinned present day toward the center.
   useEffect(() => {
     const update = () =>
       setOrientation(
@@ -473,6 +478,7 @@ export default function TimelineApp() {
   const handleResize = useCallback(
     (s: { width: number; height: number }) => {
       setSize(s);
+      if (s.width > 0 && s.height > 0) setTimelineReady(true);
       if (!fittedRef.current && s.width > 0 && s.height > 0) {
         fittedRef.current = true;
         const extent = coordExtent[1] - coordExtent[0];
@@ -648,6 +654,13 @@ export default function TimelineApp() {
             event={selectedEvent}
             onClose={() => setSelectedEvent(null)}
           />
+        )}
+
+        {webglSupported && !timelineReady && (
+          <div className="loading-overlay" role="status" aria-live="polite">
+            <div className="spinner" aria-hidden="true" />
+            <div className="loading-label">Loading timeline…</div>
+          </div>
         )}
       </main>
     </div>
