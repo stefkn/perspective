@@ -11,13 +11,14 @@ import {
 import type { TimelineEvent } from "../lib/types";
 import {
   yearToCoord,
+  coordToYear,
   timeOffset,
   NOW,
   type Orientation,
   type Scale,
 } from "../lib/time-transform";
 import { opacityForSignificance, significanceColor } from "../lib/significance";
-import { generateTicks } from "../lib/ticks";
+import { generateTicks, monthYearLabel } from "../lib/ticks";
 import type { LaneBand, LaneDefinition, LaneId } from "../lib/lanes";
 import { buildPeriodBands, buildLaneLayers } from "./lane-layers";
 import {
@@ -386,6 +387,19 @@ export default function Timeline({
         ? { position: offset(0, 36), text: `Now · ${NOW}`, anchor: "middle" as const, baseline: "top" as const }
         : { position: offset(0, -30), text: `Now · ${NOW}`, anchor: "end" as const, baseline: "center" as const };
 
+    // When zoomed in so far that no tick label fits in the viewport, pin the
+    // current month+year to the deep-past edge so the user never loses track
+    // of where they are on the timeline.
+    const pinnedTickLabel = (() => {
+      if (ticks.some((t) => t.label) || !visibleCoordRange) return [];
+      const loCoord = Math.max(visibleCoordRange[0], coordExtent[0]);
+      const position =
+        orientation === "horizontal"
+          ? offset(loCoord, 16)
+          : offset(loCoord, -16);
+      return [{ position, text: monthYearLabel(coordToYear(loCoord, scale)) }];
+    })();
+
     const zoomScale = Math.pow(2, timeZoom);
     const dotPosition = (d: { coord: number; event: TimelineEvent }) => {
       const spread = otdDotSpreadPx(d.event.dayIndex) / zoomScale;
@@ -425,6 +439,19 @@ export default function Timeline({
         getText: (d) => d.text,
         getTextAnchor: (d) => d.anchor,
         getAlignmentBaseline: (d) => d.baseline,
+        getColor: TICK_COLOR,
+        sizeUnits: "pixels",
+        getSize: 11,
+        fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+        pickable: false,
+      }),
+      new TextLayer({
+        id: "tick-pinned-label",
+        data: pinnedTickLabel,
+        getPosition: (d) => d.position,
+        getText: (d) => d.text,
+        getTextAnchor: orientation === "horizontal" ? "start" : "end",
+        getAlignmentBaseline: orientation === "horizontal" ? "top" : "bottom",
         getColor: TICK_COLOR,
         sizeUnits: "pixels",
         getSize: 11,
