@@ -305,7 +305,9 @@ export default function Timeline({
   }, [selectedEvent, scale, orientation, viewState.zoomX, viewState.zoomY]);
 
   const layers = useMemo(() => {
-    const ticks = generateTicks(scale);
+    const timeZoom =
+      orientation === "horizontal" ? viewState.zoomX : viewState.zoomY;
+    const ticks = generateTicks(scale, timeZoom, visibleCoordRange, coordExtent);
 
     const eventPoints = events
       .map((event) => {
@@ -360,29 +362,29 @@ export default function Timeline({
       target: offset(t.coord, t.major ? 8 : 4),
     }));
 
-    const tickLabels = ticks.map((t) => {
-      if (orientation === "horizontal") {
+    const tickLabels = ticks
+      .filter((t) => t.label)
+      .map((t) => {
+        if (orientation === "horizontal") {
+          return {
+            position: offset(t.coord, 16),
+            text: t.label,
+            anchor: "middle" as const,
+            baseline: "top" as const,
+          };
+        }
         return {
-          position: offset(t.coord, 16),
+          position: offset(t.coord, -16),
           text: t.label,
-          anchor: "middle" as const,
-          baseline: "top" as const,
+          anchor: "end" as const,
+          baseline: "center" as const,
         };
-      }
-      return {
-        position: offset(t.coord, -16),
-        text: t.label,
-        anchor: "end" as const,
-        baseline: "center" as const,
-      };
-    });
+      });
 
     const nowLabel =
       orientation === "horizontal"
         ? { position: offset(0, 36), text: `Now · ${NOW}`, anchor: "middle" as const, baseline: "top" as const }
         : { position: offset(0, -30), text: `Now · ${NOW}`, anchor: "end" as const, baseline: "center" as const };
-
-    const timeZoom = orientation === "horizontal" ? viewState.zoomX : viewState.zoomY;
 
     const zoomScale = Math.pow(2, timeZoom);
     const dotPosition = (d: { coord: number; event: TimelineEvent }) => {
