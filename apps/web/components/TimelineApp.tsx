@@ -51,6 +51,11 @@ const FIT_PAD = 1.15;
 const INTRO_SPAN_YEARS = 70;
 const INTRO_DURATION_MS = 9000;
 
+// Breathing room (in screen px) kept between the present-day edge and the
+// viewport edge while the intro pins it there, so the "Now" label isn't
+// clipped at the very top (portrait) or right (landscape).
+const PRESENT_EDGE_INSET_PX = 24;
+
 const OTD_LABEL_SAMPLE_COUNT = 100;
 const OTD_LABEL_SAMPLE_COUNT_MOBILE = 15;
 const MOBILE_MAX_WIDTH = 640;
@@ -205,6 +210,7 @@ export default function TimelineApp() {
       dim: number,
       duration: number,
       onComplete?: () => void,
+      edgeInsetPx = 0,
     ) => {
       animCancelRef.current?.();
       const startTime = performance.now();
@@ -217,8 +223,13 @@ export default function TimelineApp() {
         const t = Math.min((now - startTime) / duration, 1);
         const e = ease(t);
         const zoom = start.zoom + (end.zoom - start.zoom) * e;
-        const right = start.right + (end.right - start.right) * e;
-        setTimeCenter(right - dim / (2 * Math.pow(2, zoom)));
+        // With an inset, pin the present day at a constant pixel offset from
+        // the edge (instead of at the edge coordinate) so the gap stays fixed
+        // while the view zooms.
+        const edge = edgeInsetPx
+          ? edgeInsetPx / Math.pow(2, zoom)
+          : start.right + (end.right - start.right) * e;
+        setTimeCenter(edge - dim / (2 * Math.pow(2, zoom)));
         setTimeZoom(zoom);
         if (t < 1) {
           animRafRef.current = requestAnimationFrame(tick);
@@ -302,14 +313,15 @@ export default function TimelineApp() {
     const endZoom = Math.log2(dim / (INTRO_SPAN_YEARS * PIXELS_PER_LINEAR_YEAR));
 
     // Keep the present day pinned to the far edge (right in landscape, top in
-    // portrait) for the whole zoom instead of letting it drift toward the
-    // center and back.
+    // portrait) for the whole zoom, a small fixed distance inside so the "Now"
+    // label has room to breathe instead of sitting clipped at the edge.
     animateView(
       { zoom: fitZoom, right: 0 },
       { zoom: endZoom, right: 0 },
       dim,
       INTRO_DURATION_MS,
       () => setIntroDone(true),
+      PRESENT_EDGE_INSET_PX,
     );
   }, [size, orientation, coordExtent, animateView]);
 
