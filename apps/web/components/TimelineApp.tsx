@@ -250,13 +250,15 @@ export default function TimelineApp() {
     [configs, updateLane],
   );
 
-  const moveLane = useCallback((id: LaneId, dir: -1 | 1) => {
+  const reorderLane = useCallback((id: LaneId, toIndex: number) => {
     setLaneState((s) => {
-      const idx = s.order.indexOf(id);
-      const j = idx + dir;
-      if (idx < 0 || j < 0 || j >= s.order.length) return s;
+      const from = s.order.indexOf(id);
+      if (from < 0) return s;
+      const clamped = Math.min(Math.max(toIndex, 0), s.order.length - 1);
+      if (from === clamped) return s;
       const order = [...s.order];
-      [order[idx], order[j]] = [order[j], order[idx]];
+      order.splice(from, 1);
+      order.splice(clamped, 0, id);
       return { order, configs: s.configs };
     });
   }, []);
@@ -738,7 +740,7 @@ export default function TimelineApp() {
           configs={configs}
           orientation={orientation}
           onToggle={toggleLane}
-          onMove={moveLane}
+          onReorder={reorderLane}
           onSetSize={setLaneSize}
           onFlipSide={flipLaneSide}
         />

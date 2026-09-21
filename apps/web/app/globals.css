@@ -178,15 +178,51 @@ button {
 }
 
 .lane-row {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 6px;
   padding: 6px 6px;
   border-radius: 6px;
+  min-height: 40px;
 }
 
 .lane-row:hover {
   background: rgba(255, 255, 255, 0.04);
+}
+
+.lane-row.dragging {
+  z-index: 1;
+  background: rgba(255, 255, 255, 0.08);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.45);
+}
+
+.lane-row-grip {
+  flex-shrink: 0;
+  align-self: stretch;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  margin: -6px 0 -6px -6px;
+  background: transparent;
+  border: none;
+  padding: 0;
+  font-size: 15px;
+  line-height: 1;
+  letter-spacing: -1px;
+  color: var(--muted);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.lane-row-grip:hover {
+  color: var(--text);
+}
+
+.lane-row-grip:active {
+  cursor: grabbing;
 }
 
 .lane-row-swatch {
@@ -264,31 +300,6 @@ button {
   accent-color: var(--accent);
   margin: 0;
   flex-shrink: 0;
-}
-
-.lane-row-move {
-  display: inline-flex;
-  flex-direction: column;
-}
-
-.lane-row-move button {
-  background: transparent;
-  border: none;
-  padding: 0;
-  width: 18px;
-  height: 12px;
-  font-size: 8px;
-  line-height: 1;
-  color: var(--muted);
-}
-
-.lane-row-move button:hover:not(:disabled) {
-  color: var(--text);
-}
-
-.lane-row-move button:disabled {
-  opacity: 0.25;
-  cursor: default;
 }
 
 .timeline-stage {
