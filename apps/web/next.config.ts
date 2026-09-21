@@ -7,6 +7,8 @@ const nextConfig: NextConfig = {
   allowedDevOrigins: [
     "192.168.*.*",
     "10.*.*.*",
+    // Tailscale assigns addresses in the 100.64.0.0/10 CGNAT range.
+    "100.*.*.*",
     "172.16.*.*",
     "172.17.*.*",
     "172.18.*.*",

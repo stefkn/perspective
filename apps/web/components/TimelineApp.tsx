@@ -1,8 +1,16 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import dynamic from "next/dynamic";
 import { EVENTS } from "../lib/events";
+import type { TimelineEvent } from "../lib/types";
 import {
   yearToCoord,
   coordToYear,
@@ -22,7 +30,24 @@ import {
 } from "../lib/view-state";
 import { computeLabelBoxes, resolveLabelTargets } from "../lib/labels";
 import { isWebGL2Supported } from "../lib/webgl";
-import { LANES, layoutLaneBands, type LaneId } from "../lib/lanes";
+import {
+  LANES,
+  LANE_BY_ID,
+  LANE_SIZES,
+  MAIN_AXIS_ID,
+  defaultLaneConfigs,
+  defaultLaneItems,
+  layoutLaneBands,
+  type LaneConfig,
+  type LaneId,
+  type LaneItem,
+  type LaneSize,
+} from "../lib/lanes";
+import {
+  loadOnThisDayEvents,
+  OTD_DOT_SPAN_DAYS,
+  OTD_LABEL_SPAN_DAYS,
+} from "../lib/on-this-day";
 
 import EventDetail from "./EventDetail";
 import FallbackTimeline from "./FallbackTimeline";
@@ -32,11 +57,94 @@ import LaneToggles from "./LaneToggles";
 const Timeline = dynamic(() => import("./Timeline"), { ssr: false });
 const Minimap = dynamic(() => import("./Minimap"), { ssr: false });
 
-const MAX_ZOOM = 8;
+const MAX_ZOOM = 16;
 const FIT_PAD = 1.15;
 
-const INTRO_SPAN_YEARS = 100;
+const LANE_STORAGE_KEY = "perspective.lanes";
+
+function defaultLaneState(): {
+  items: LaneItem[];
+  configs: Record<LaneId, LaneConfig>;
+} {
+  return { items: defaultLaneItems(), configs: defaultLaneConfigs() };
+}
+
+function loadLaneState(): {
+  items: LaneItem[];
+  configs: Record<LaneId, LaneConfig>;
+} {
+  const { items, configs } = defaultLaneState();
+
+  if (typeof window === "undefined") return { items, configs };
+
+  try {
+    const raw = window.localStorage.getItem(LANE_STORAGE_KEY);
+    if (!raw) return { items, configs };
+    const parsed = JSON.parse(raw) as {
+      items?: unknown;
+      configs?: Record<string, unknown>;
+    };
+
+    if (Array.isArray(parsed.items)) {
+      const valid = parsed.items.filter(
+        (item): item is LaneItem =>
+          item === MAIN_AXIS_ID ||
+          (typeof item === "string" && item in LANE_BY_ID),
+      );
+      const seen = new Set<LaneItem>();
+      const merged: LaneItem[] = [];
+      for (const item of valid) {
+        if (item === MAIN_AXIS_ID) {
+          if (!seen.has(item)) {
+            seen.add(item);
+            merged.push(item);
+          }
+          continue;
+        }
+        if (!seen.has(item)) {
+          seen.add(item);
+          merged.push(item);
+        }
+      }
+      for (const item of items) {
+        if (!seen.has(item)) merged.push(item);
+      }
+      items.splice(0, items.length, ...merged);
+    }
+
+    if (parsed.configs && typeof parsed.configs === "object") {
+      for (const id of Object.keys(configs) as LaneId[]) {
+        const c = parsed.configs[id];
+        if (!c || typeof c !== "object") continue;
+        const entry = c as Partial<LaneConfig>;
+        if (typeof entry.visible === "boolean") configs[id].visible = entry.visible;
+        if (
+          entry.size === "compact" ||
+          entry.size === "normal" ||
+          entry.size === "large"
+        ) {
+          configs[id].size = entry.size;
+        }
+      }
+    }
+  } catch {
+    // Fall through to defaults on any parse error.
+  }
+
+  return { items, configs };
+}
+
+const INTRO_SPAN_YEARS = 70;
 const INTRO_DURATION_MS = 9000;
+
+// Breathing room (in screen px) kept between the present-day edge and the
+// viewport edge while the intro pins it there, so the "Now" label isn't
+// clipped at the very top (portrait) or right (landscape).
+const PRESENT_EDGE_INSET_PX = 24;
+
+const OTD_LABEL_SAMPLE_COUNT = 100;
+const OTD_LABEL_SAMPLE_COUNT_MOBILE = 15;
+const MOBILE_MAX_WIDTH = 640;
 
 function clampCoord(coord: number, extent: [number, number]): number {
   return Math.min(Math.max(coord, extent[0]), extent[1]);
@@ -99,43 +207,115 @@ export default function TimelineApp() {
   const [timeZoom, setTimeZoom] = useState(0.6);
   const [size, setSize] = useState({ width: 0, height: 0 });
   const fittedRef = useRef(false);
+  const lastViewStateRef = useRef<{ center: number; zoom: number; perp: number } | null>(null);
 
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedEvent, setSelectedEvent] = useState<TimelineEvent | null>(null);
+  const selectedId = selectedEvent?.id ?? null;
+  const [onThisDayEvents, setOnThisDayEvents] = useState<TimelineEvent[]>([]);
   const [webglSupported, setWebglSupported] = useState(true);
+  const [timelineReady, setTimelineReady] = useState(false);
+  const [otdShowcaseAlpha, setOtdShowcaseAlpha] = useState(0);
+  const [introDone, setIntroDone] = useState(false);
 
-  const [visibility, setVisibility] = useState<Record<LaneId, boolean>>(() => {
-    const initial = {} as Record<LaneId, boolean>;
-    for (const lane of LANES) initial[lane.id] = lane.defaultVisible;
-    return initial;
-  });
+  const [laneState, setLaneState] = useState(defaultLaneState);
+  const [laneHydrated, setLaneHydrated] = useState(false);
+  const items = laneState.items;
+  const configs = laneState.configs;
 
-  const [expandedLaneId, setExpandedLaneId] = useState<LaneId | null>(null);
   const [perpOffset, setPerpOffset] = useState(0);
 
-  const toggleLane = useCallback((id: LaneId) => {
-    setVisibility((v) => {
-      const next = { ...v, [id]: !v[id] };
-      if (!next[id]) setExpandedLaneId((e) => (e === id ? null : e));
-      return next;
+  const updateLane = useCallback(
+    (id: LaneId, patch: Partial<LaneConfig>) => {
+      setLaneState((s) => ({
+        items: s.items,
+        configs: { ...s.configs, [id]: { ...s.configs[id], ...patch } },
+      }));
+    },
+    [],
+  );
+
+  const toggleLane = useCallback(
+    (id: LaneId) => updateLane(id, { visible: !configs[id].visible }),
+    [configs, updateLane],
+  );
+
+  const cycleLaneSize = useCallback((id: LaneId) => {
+    setLaneState((s) => {
+      const idx = LANE_SIZES.indexOf(s.configs[id].size);
+      const size = LANE_SIZES[(idx + 1) % LANE_SIZES.length];
+      return {
+        items: s.items,
+        configs: { ...s.configs, [id]: { ...s.configs[id], size } },
+      };
     });
   }, []);
 
-  const toggleExpanded = useCallback((id: LaneId) => {
-    setExpandedLaneId((e) => (e === id ? null : id));
+  const setLaneSize = useCallback(
+    (id: LaneId, size: LaneSize) => updateLane(id, { size }),
+    [updateLane],
+  );
+
+  const reorderItem = useCallback((item: LaneItem, toIndex: number) => {
+    setLaneState((s) => {
+      const from = s.items.indexOf(item);
+      if (from < 0) return s;
+      const clamped = Math.min(Math.max(toIndex, 0), s.items.length - 1);
+      if (from === clamped) return s;
+      const items = [...s.items];
+      items.splice(from, 1);
+      items.splice(clamped, 0, item);
+      return { items, configs: s.configs };
+    });
   }, []);
 
+  const laneSides = useMemo(() => {
+    const sides = {} as Record<LaneId, -1 | 1>;
+    let side: -1 | 1 = -1;
+    for (const item of items) {
+      if (item === MAIN_AXIS_ID) {
+        side = 1;
+        continue;
+      }
+      sides[item] = side;
+    }
+    return sides;
+  }, [items]);
+
   const visibleLanes = useMemo(
-    () => LANES.filter((lane) => visibility[lane.id]),
-    [visibility],
+    () =>
+      items
+        .filter(
+          (item): item is LaneId =>
+            item !== MAIN_AXIS_ID && configs[item].visible,
+        )
+        .map((id) => LANE_BY_ID[id]),
+    [items, configs],
   );
 
   const perpSize =
     orientation === "horizontal" ? size.height : size.width;
 
   const laneLayout = useMemo(
-    () => layoutLaneBands(visibleLanes, perpSize, expandedLaneId),
-    [visibleLanes, perpSize, expandedLaneId],
+    () => layoutLaneBands(visibleLanes, perpSize, configs, laneSides),
+    [visibleLanes, perpSize, configs, laneSides],
   );
+
+  useEffect(() => {
+    setLaneState(loadLaneState());
+    setLaneHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (!laneHydrated || typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(
+        LANE_STORAGE_KEY,
+        JSON.stringify({ items, configs }),
+      );
+    } catch {
+      // Ignore storage failures (private mode, quota, etc).
+    }
+  }, [laneHydrated, items, configs]);
 
   const clampPerp = useCallback(
     (offset: number) => {
@@ -151,7 +331,11 @@ export default function TimelineApp() {
     setPerpOffset((p) => clampPerp(p));
   }, [clampPerp]);
 
-  useEffect(() => {
+  // Detect orientation before paint (useLayoutEffect) so the intro animation
+  // never starts with the stale "horizontal" default. In the passive-effects
+  // flush, the intro effect can otherwise run against the wrong axis length on
+  // a portrait phone, which offsets the pinned present day toward the center.
+  useLayoutEffect(() => {
     const update = () =>
       setOrientation(
         window.innerWidth >= window.innerHeight ? "horizontal" : "vertical",
@@ -177,6 +361,8 @@ export default function TimelineApp() {
       end: { zoom: number; right: number },
       dim: number,
       duration: number,
+      onComplete?: () => void,
+      edgeInsetPx = 0,
     ) => {
       animCancelRef.current?.();
       const startTime = performance.now();
@@ -189,13 +375,19 @@ export default function TimelineApp() {
         const t = Math.min((now - startTime) / duration, 1);
         const e = ease(t);
         const zoom = start.zoom + (end.zoom - start.zoom) * e;
-        const right = start.right + (end.right - start.right) * e;
-        setTimeCenter(right - dim / (2 * Math.pow(2, zoom)));
+        // With an inset, pin the present day at a constant pixel offset from
+        // the edge (instead of at the edge coordinate) so the gap stays fixed
+        // while the view zooms.
+        const edge = edgeInsetPx
+          ? edgeInsetPx / Math.pow(2, zoom)
+          : start.right + (end.right - start.right) * e;
+        setTimeCenter(edge - dim / (2 * Math.pow(2, zoom)));
         setTimeZoom(zoom);
         if (t < 1) {
           animRafRef.current = requestAnimationFrame(tick);
         } else {
           finished = true;
+          onComplete?.();
         }
       };
       animRafRef.current = requestAnimationFrame(tick);
@@ -207,8 +399,49 @@ export default function TimelineApp() {
     [],
   );
 
+  const showcaseRafRef = useRef(0);
+  const showcaseCancelRef = useRef<(() => void) | null>(null);
+  const showcaseStartedRef = useRef(false);
+
+  // Briefly surface the on-this-day labels after the intro settles, so the
+  // user sees that the dots are individual recorded events before the labels
+  // fade back out.
+  const startOtdShowcase = useCallback(() => {
+    showcaseCancelRef.current?.();
+    const FADE_MS = 600;
+    const HOLD_MS = 5000;
+    const startTime = performance.now();
+    let finished = false;
+
+    const tick = (now: number) => {
+      if (finished) return;
+      const t = now - startTime;
+      let alpha: number;
+      if (t < FADE_MS) alpha = t / FADE_MS;
+      else if (t < FADE_MS + HOLD_MS) alpha = 1;
+      else if (t < FADE_MS + HOLD_MS + FADE_MS) {
+        alpha = 1 - (t - FADE_MS - HOLD_MS) / FADE_MS;
+      } else {
+        alpha = 0;
+        finished = true;
+      }
+      setOtdShowcaseAlpha(alpha);
+      if (!finished) showcaseRafRef.current = requestAnimationFrame(tick);
+    };
+    showcaseRafRef.current = requestAnimationFrame(tick);
+    showcaseCancelRef.current = () => {
+      finished = true;
+      cancelAnimationFrame(showcaseRafRef.current);
+    };
+  }, []);
+
   useEffect(() => {
-    const cancel = () => animCancelRef.current?.();
+    const cancel = () => {
+      animCancelRef.current?.();
+      showcaseCancelRef.current?.();
+      showcaseStartedRef.current = true;
+      setOtdShowcaseAlpha(0);
+    };
     window.addEventListener("wheel", cancel, { passive: true, capture: true });
     window.addEventListener("pointerdown", cancel, { capture: true });
     return () => {
@@ -228,17 +461,35 @@ export default function TimelineApp() {
     const extent = coordExtent[1] - coordExtent[0];
 
     const fitZoom = Math.log2(dim / (extent * FIT_PAD));
-    const fitRight = (extent * (FIT_PAD - 1)) / 2;
 
     const endZoom = Math.log2(dim / (INTRO_SPAN_YEARS * PIXELS_PER_LINEAR_YEAR));
 
+    // Keep the present day pinned to the far edge (right in landscape, top in
+    // portrait) for the whole zoom, a small fixed distance inside so the "Now"
+    // label has room to breathe instead of sitting clipped at the edge.
     animateView(
-      { zoom: fitZoom, right: fitRight },
+      { zoom: fitZoom, right: 0 },
       { zoom: endZoom, right: 0 },
       dim,
       INTRO_DURATION_MS,
+      () => setIntroDone(true),
+      PRESENT_EDGE_INSET_PX,
     );
   }, [size, orientation, coordExtent, animateView]);
+
+  // Start the label showcase once the intro has finished AND the on-this-day
+  // events have loaded, so the labels never flash over an empty view.
+  useEffect(() => {
+    if (
+      showcaseStartedRef.current ||
+      !introDone ||
+      onThisDayEvents.length === 0
+    ) {
+      return;
+    }
+    showcaseStartedRef.current = true;
+    startOtdShowcase();
+  }, [introDone, onThisDayEvents, startOtdShowcase]);
 
   const viewState = useMemo<TimeViewState>(() => {
     const extent = coordExtent[1] - coordExtent[0];
@@ -256,9 +507,9 @@ export default function TimelineApp() {
     return { target: [perp, -coord], zoomX: 0, zoomY: zoom };
   }, [timeCenter, timeZoom, orientation, size, coordExtent, perpOffset, clampPerp]);
 
-  const minSignificance = useMemo(() => {
-    if (size.width <= 0 || size.height <= 0) return LOD_MAX_MIN_SIG;
-    const span = visibleYearSpan(
+  const visibleSpanYears = useMemo(() => {
+    if (size.width <= 0 || size.height <= 0) return 0;
+    return visibleYearSpan(
       viewState,
       size.width,
       size.height,
@@ -266,8 +517,49 @@ export default function TimelineApp() {
       scale,
       coordExtent,
     );
-    return spanToMinSignificance(span);
   }, [viewState, size, orientation, scale, coordExtent]);
+
+  const minSignificance = useMemo(() => {
+    if (size.width <= 0 || size.height <= 0) return LOD_MAX_MIN_SIG;
+    return spanToMinSignificance(visibleSpanYears);
+  }, [visibleSpanYears, size]);
+
+  const onThisDayActive =
+    visibleSpanYears > 0 &&
+    visibleSpanYears * 365.25 < OTD_DOT_SPAN_DAYS;
+  const showOnThisDayLabels =
+    visibleSpanYears > 0 &&
+    visibleSpanYears * 365.25 < OTD_LABEL_SPAN_DAYS;
+  const showOtdLabels = showOnThisDayLabels || otdShowcaseAlpha > 0;
+  const otdLabelAlpha = otdShowcaseAlpha > 0 ? otdShowcaseAlpha : 1;
+  const otdLabelSampleCount =
+    size.width > 0 && size.width < MOBILE_MAX_WIDTH
+      ? OTD_LABEL_SAMPLE_COUNT_MOBILE
+      : OTD_LABEL_SAMPLE_COUNT;
+
+  // Warm the on-this-day cache at startup so the dots are ready by the time
+  // the intro zoom reaches them, even on slow mobile connections.
+  useEffect(() => {
+    loadOnThisDayEvents().catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (!onThisDayActive) {
+      setOnThisDayEvents([]);
+      return;
+    }
+    let cancelled = false;
+    loadOnThisDayEvents()
+      .then((events) => {
+        if (!cancelled) setOnThisDayEvents(events);
+      })
+      .catch(() => {
+        if (!cancelled) setOnThisDayEvents([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [onThisDayActive]);
 
   const bounds = useMemo<[number, number, number, number]>(() => {
     if (size.width <= 0 || size.height <= 0) {
@@ -319,22 +611,45 @@ export default function TimelineApp() {
 
   const handleViewStateChange = useCallback(
     (vs: TimeViewState) => {
+      const extent = coordExtent[1] - coordExtent[0];
+      const dim = orientation === "horizontal" ? size.width : size.height;
+      const fit = dim > 0 ? Math.log2(dim / (extent * FIT_PAD)) : -Infinity;
+
+      let center: number;
+      let zoom: number;
+      let perp: number;
       if (orientation === "horizontal") {
-        setTimeCenter(vs.target[0]);
-        setTimeZoom(vs.zoomX);
-        setPerpOffset(clampPerp(vs.target[1]));
+        center = clampCoord(vs.target[0], coordExtent);
+        zoom = Math.min(Math.max(vs.zoomX, fit), MAX_ZOOM);
+        perp = clampPerp(vs.target[1]);
       } else {
-        setTimeCenter(-vs.target[1]);
-        setTimeZoom(vs.zoomY);
-        setPerpOffset(clampPerp(vs.target[0]));
+        center = clampCoord(-vs.target[1], coordExtent);
+        zoom = Math.min(Math.max(vs.zoomY, fit), MAX_ZOOM);
+        perp = clampPerp(vs.target[0]);
       }
+
+      const prev = lastViewStateRef.current;
+      if (
+        prev &&
+        Math.abs(prev.center - center) < 1e-6 &&
+        Math.abs(prev.zoom - zoom) < 1e-6 &&
+        Math.abs(prev.perp - perp) < 1e-6
+      ) {
+        return;
+      }
+      lastViewStateRef.current = { center, zoom, perp };
+
+      setTimeCenter(center);
+      setTimeZoom(zoom);
+      setPerpOffset(perp);
     },
-    [orientation, clampPerp],
+    [orientation, coordExtent, size, clampPerp],
   );
 
   const handleResize = useCallback(
     (s: { width: number; height: number }) => {
       setSize(s);
+      if (s.width > 0 && s.height > 0) setTimelineReady(true);
       if (!fittedRef.current && s.width > 0 && s.height > 0) {
         fittedRef.current = true;
         const extent = coordExtent[1] - coordExtent[0];
@@ -348,7 +663,6 @@ export default function TimelineApp() {
 
   const resetView = useCallback(() => {
     setPerpOffset(0);
-    setExpandedLaneId(null);
 
     const extent = coordExtent[1] - coordExtent[0];
     const dim = orientation === "horizontal" ? size.width : size.height;
@@ -412,10 +726,6 @@ export default function TimelineApp() {
     setTimeZoom(Math.log2(dim / span));
   }, [scale, timeCenter, orientation, size, viewState, coordExtent]);
 
-  const selectedEvent = selectedId
-    ? EVENTS.find((e) => e.id === selectedId) ?? null
-    : null;
-
   return (
     <div
       className={`timeline-app ${
@@ -447,8 +757,11 @@ export default function TimelineApp() {
         </div>
         <LaneToggles
           lanes={LANES}
-          visibility={visibility}
+          items={items}
+          configs={configs}
           onToggle={toggleLane}
+          onReorder={reorderItem}
+          onSetSize={setLaneSize}
         />
         <button className="app-reset" onClick={resetView}>
           Reset view
@@ -462,27 +775,32 @@ export default function TimelineApp() {
               <FallbackTimeline
                 events={EVENTS}
                 selectedId={selectedId}
-                onSelect={(e) => setSelectedId(e ? e.id : null)}
+                onSelect={setSelectedEvent}
               />
             }
           >
             <Timeline
               events={EVENTS}
+              onThisDayEvents={onThisDayEvents}
+              showOnThisDayLabels={showOnThisDayLabels}
+              showOtdLabels={showOtdLabels}
+              otdLabelAlpha={otdLabelAlpha}
+              otdLabelSampleCount={otdLabelSampleCount}
+              selectedEvent={selectedEvent}
               lanes={visibleLanes}
               laneBands={laneLayout.bands}
               orientation={orientation}
               scale={scale}
               viewState={viewState}
               minSignificance={minSignificance}
-              selectedId={selectedId}
               coordExtent={coordExtent}
               labelAlpha={labelAlpha}
               visibleCoordRange={visibleCoordRange}
               visiblePerpRange={visiblePerpRange}
               onViewStateChange={handleViewStateChange}
               onResize={handleResize}
-              onSelect={(e) => setSelectedId(e ? e.id : null)}
-              onExpandLane={toggleExpanded}
+              onSelect={setSelectedEvent}
+              onCycleLane={cycleLaneSize}
             />
 
             <div className="minimap-wrap">
@@ -500,15 +818,22 @@ export default function TimelineApp() {
           <FallbackTimeline
             events={EVENTS}
             selectedId={selectedId}
-            onSelect={(e) => setSelectedId(e ? e.id : null)}
+            onSelect={setSelectedEvent}
           />
         )}
 
         {selectedEvent && (
           <EventDetail
             event={selectedEvent}
-            onClose={() => setSelectedId(null)}
+            onClose={() => setSelectedEvent(null)}
           />
+        )}
+
+        {webglSupported && !timelineReady && (
+          <div className="loading-overlay" role="status" aria-live="polite">
+            <div className="spinner" aria-hidden="true" />
+            <div className="loading-label">Loading timeline…</div>
+          </div>
         )}
       </main>
     </div>

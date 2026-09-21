@@ -56,12 +56,18 @@ export const MAIN_AXIS_HALF = 48;
 // Gap between adjacent lanes, in world units (pixels on the perp axis).
 export const LANE_GAP = 12;
 
-// Minimum / maximum lane half-widths (world units = pixels). Lanes grow to
-// fill available perpendicular space up to MAX_LANE_HALF, but never shrink
-// below MIN_LANE_HALF.
-export const MIN_LANE_HALF = 55;
-export const MAX_LANE_HALF = 140;
-export const EXPANDED_HALF = 160;
+// Discrete per-lane size levels. Each maps to a fixed half-width (in world
+// units = pixels on the perp axis) so a user can grant more or less space to
+// the lanes they care about, independent of how many lanes are visible.
+export type LaneSize = "compact" | "normal" | "large";
+
+export const LANE_SIZE_HALF: Record<LaneSize, number> = {
+  compact: 55,
+  normal: 90,
+  large: 160,
+};
+
+export const LANE_SIZES: LaneSize[] = ["compact", "normal", "large"];
 
 // Map a normalized value in [0, 1] to a perpendicular offset inside a band.
 // Values grow away from the main axis: 0 at the inner edge, 1 at the outer edge.
@@ -91,6 +97,7 @@ export function valueToFraction(
 export interface SeriesPoint {
   year: number;
   value: number;
+  estimated?: boolean;
 }
 
 export type SeriesData = SeriesPoint[];
@@ -101,6 +108,7 @@ export type LaneId =
   | "co2"
   | "powers"
   | "people"
+  | "culture"
   | "life-expectancy"
   | "gdp";
 
@@ -110,21 +118,65 @@ export interface LaneDefinition {
   id: LaneId;
   title: string;
   kind: LaneKind;
-  side: -1 | 1;
+  defaultSide: -1 | 1;
   color: [number, number, number];
   defaultVisible: boolean;
 }
 
-// Ordered registry of toggleable lanes. Order defines stacking within a side.
+// Sentinel id for the fixed "main timeline" divider in the ordered lane list.
+// Lanes before it sit on one side of the axis, lanes after it on the other, so
+// the list order is exactly the on-screen order (no separate side setting).
+export const MAIN_AXIS_ID = "main" as const;
+
+export type LaneItem = LaneId | typeof MAIN_AXIS_ID;
+
+// Per-user, per-lane settings: visibility and how much perpendicular space it
+// gets. Side is derived from the lane's position relative to MAIN_AXIS_ID.
+export interface LaneConfig {
+  visible: boolean;
+  size: LaneSize;
+}
+
+// Registry of toggleable lanes. `defaultSide` seeds where the lane starts
+// relative to the main axis; the user can reorder lanes (and the divider), so
+// this array is the seed, not the source of truth.
 export const LANES: LaneDefinition[] = [
-  { id: "population", title: "World population", kind: "series", side: -1, color: [255, 209, 102], defaultVisible: false },
-  { id: "energy", title: "Primary energy", kind: "stacked", side: -1, color: [220, 220, 230], defaultVisible: false },
-  { id: "co2", title: "CO2 emissions", kind: "series", side: -1, color: [226, 96, 72], defaultVisible: false },
-  { id: "powers", title: "Major world powers", kind: "intervals", side: 1, color: [86, 200, 178], defaultVisible: false },
-  { id: "people", title: "Notable lifespans", kind: "intervals", side: -1, color: [214, 150, 236], defaultVisible: true },
-  { id: "life-expectancy", title: "Life expectancy", kind: "series", side: 1, color: [126, 199, 106], defaultVisible: false },
-  { id: "gdp", title: "Global GDP", kind: "series", side: 1, color: [109, 165, 240], defaultVisible: false },
+  { id: "population", title: "World population", kind: "series", defaultSide: -1, color: [255, 209, 102], defaultVisible: false },
+  { id: "energy", title: "Primary energy", kind: "stacked", defaultSide: -1, color: [220, 220, 230], defaultVisible: false },
+  { id: "co2", title: "CO2 emissions", kind: "series", defaultSide: -1, color: [226, 96, 72], defaultVisible: false },
+  { id: "powers", title: "Major world powers", kind: "intervals", defaultSide: 1, color: [86, 200, 178], defaultVisible: false },
+  { id: "people", title: "Notable lifespans", kind: "intervals", defaultSide: -1, color: [214, 150, 236], defaultVisible: true },
+  { id: "culture", title: "Cultural works", kind: "intervals", defaultSide: 1, color: [240, 180, 90], defaultVisible: false },
+  { id: "life-expectancy", title: "Life expectancy", kind: "series", defaultSide: 1, color: [126, 199, 106], defaultVisible: false },
+  { id: "gdp", title: "Global GDP", kind: "series", defaultSide: 1, color: [109, 165, 240], defaultVisible: false },
 ];
+
+export const LANE_BY_ID: Record<LaneId, LaneDefinition> = Object.fromEntries(
+  LANES.map((lane) => [lane.id, lane]),
+) as Record<LaneId, LaneDefinition>;
+
+export function defaultLaneConfig(lane: LaneDefinition): LaneConfig {
+  return {
+    visible: lane.defaultVisible,
+    size: "normal",
+  };
+}
+
+export function defaultLaneConfigs(): Record<LaneId, LaneConfig> {
+  const configs = {} as Record<LaneId, LaneConfig>;
+  for (const lane of LANES) configs[lane.id] = defaultLaneConfig(lane);
+  return configs;
+}
+
+// Initial ordered item list: lanes grouped by their default side, with the
+// main-axis divider between the two groups.
+export function defaultLaneItems(): LaneItem[] {
+  return [
+    ...LANES.filter((lane) => lane.defaultSide === -1).map((lane) => lane.id),
+    MAIN_AXIS_ID,
+    ...LANES.filter((lane) => lane.defaultSide === 1).map((lane) => lane.id),
+  ];
+}
 
 export interface LaneLayout {
   bands: Record<LaneId, LaneBand>;
@@ -132,40 +184,26 @@ export interface LaneLayout {
   posExtent: number;
 }
 
-// Lay out visible lanes into perpendicular bands that grow to fill the
-// available space (up to MAX_LANE_HALF), with a wider MIN_LANE_HALF floor.
-// When an expanded lane is present it takes EXPANDED_HALF while the rest
-// shrink to MIN_LANE_HALF, and the resulting overflow is reached by panning.
+// Lay out visible lanes into perpendicular bands. Ordering (the order of
+// `lanes`) determines stacking within a side, `sides` places each lane relative
+// to the axis, and `configs` supplies the per-lane size. Overflow is reached
+// by panning.
 export function layoutLaneBands(
   lanes: LaneDefinition[],
   perpSize: number,
-  expandedId: LaneId | null,
+  configs: Record<LaneId, LaneConfig>,
+  sides: Record<LaneId, -1 | 1>,
 ): LaneLayout {
   const bands = {} as Record<LaneId, LaneBand>;
   const halfPerSide = { [-1]: 0, [1]: 0 } as Record<-1 | 1, number>;
 
-  const avail = perpSize / 2 - MAIN_AXIS_HALF - LANE_GAP;
-
   for (const side of [-1, 1] as const) {
-    const sideLanes = lanes.filter((l) => l.side === side);
-    const n = sideLanes.length;
-    if (n === 0) continue;
-
-    const sharedHalf = Math.min(
-      Math.max((avail - (n - 1) * LANE_GAP) / (2 * n), MIN_LANE_HALF),
-      MAX_LANE_HALF,
-    );
+    const sideLanes = lanes.filter((l) => sides[l.id] === side);
+    if (sideLanes.length === 0) continue;
 
     let cursor = MAIN_AXIS_HALF + LANE_GAP;
     for (const lane of sideLanes) {
-      let half: number;
-      if (lane.id === expandedId) {
-        half = EXPANDED_HALF;
-      } else if (expandedId) {
-        half = MIN_LANE_HALF;
-      } else {
-        half = sharedHalf;
-      }
+      const half = LANE_SIZE_HALF[configs[lane.id].size];
       const center = side * (cursor + half);
       bands[lane.id] = { center, half };
       cursor += 2 * half + LANE_GAP;

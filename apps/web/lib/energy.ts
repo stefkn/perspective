@@ -30,12 +30,14 @@ export const ENERGY_SOURCES: EnergySource[] = [
 export interface EnergyPoint {
   year: number;
   values: Record<EnergySourceId, number>;
+  estimated?: boolean;
 }
 
 // Global primary energy consumption by source, in TWh. Approximate values
 // aligned with Our World in Data (Energy Institute Statistical Review).
 // https://ourworldindata.org/grapher/global-primary-energy-by-source
 export const ENERGY: EnergyPoint[] = [
+  { year: -3000, values: { coal: 0, oil: 0, gas: 0, nuclear: 0, hydro: 0, wind: 0, solar: 0, other: 0 }, estimated: true },
   { year: 1800, values: { coal: 100, oil: 0, gas: 0, nuclear: 0, hydro: 0, wind: 0, solar: 0, other: 0 } },
   { year: 1850, values: { coal: 800, oil: 0, gas: 0, nuclear: 0, hydro: 0, wind: 0, solar: 0, other: 0 } },
   { year: 1900, values: { coal: 6000, oil: 200, gas: 0, nuclear: 0, hydro: 20, wind: 0, solar: 0, other: 0 } },
