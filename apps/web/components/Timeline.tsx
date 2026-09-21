@@ -86,7 +86,7 @@ interface TimelineProps {
   onViewStateChange: (vs: TimeViewState) => void;
   onResize: (size: { width: number; height: number }) => void;
   onSelect: (event: TimelineEvent | null) => void;
-  onExpandLane: (id: LaneId) => void;
+  onCycleLane: (id: LaneId) => void;
 }
 
 export default function Timeline({
@@ -110,7 +110,7 @@ export default function Timeline({
   onViewStateChange,
   onResize,
   onSelect,
-  onExpandLane,
+  onCycleLane,
 }: TimelineProps) {
   const offset = (coord: number, perp: number): [number, number, number] =>
     timeOffset(coord, perp, orientation);
@@ -687,7 +687,7 @@ export default function Timeline({
       onClick={(info) => {
         const laneId = info.object?.laneId as LaneId | undefined;
         if (laneId) {
-          onExpandLane(laneId);
+          onCycleLane(laneId);
           return;
         }
         onSelect(info.object?.event ?? null);

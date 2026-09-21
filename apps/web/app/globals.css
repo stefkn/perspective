@@ -159,7 +159,8 @@ button {
   top: calc(100% + 8px);
   right: 0;
   z-index: 30;
-  min-width: 220px;
+  min-width: 320px;
+  max-width: min(380px, calc(100vw - 24px));
   background: var(--bg-panel);
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -176,35 +177,118 @@ button {
   color: var(--muted);
 }
 
-.lane-toggle-item {
+.lane-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 8px;
+  gap: 6px;
+  padding: 6px 6px;
   border-radius: 6px;
-  cursor: pointer;
-  user-select: none;
 }
 
-.lane-toggle-item:hover {
+.lane-row:hover {
   background: rgba(255, 255, 255, 0.04);
 }
 
-.lane-toggle-item input {
-  accent-color: var(--accent);
-  margin: 0;
-}
-
-.lane-toggle-swatch {
+.lane-row-swatch {
   width: 10px;
   height: 10px;
   border-radius: 2px;
   flex-shrink: 0;
 }
 
-.lane-toggle-label {
+.lane-row-title {
+  flex: 1;
+  min-width: 0;
   font-size: 13px;
   color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lane-row-side {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 7px;
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.lane-row-side:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.lane-row-size {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.lane-row-size button {
+  background: transparent;
+  border: none;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--muted);
+}
+
+.lane-row-size button:hover:not(:disabled) {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.lane-row-size button:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.lane-row-size-level {
+  min-width: 12px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--text);
+  text-transform: uppercase;
+  font-variant-numeric: tabular-nums;
+}
+
+.lane-row-visible {
+  accent-color: var(--accent);
+  margin: 0;
+  flex-shrink: 0;
+}
+
+.lane-row-move {
+  display: inline-flex;
+  flex-direction: column;
+}
+
+.lane-row-move button {
+  background: transparent;
+  border: none;
+  padding: 0;
+  width: 18px;
+  height: 12px;
+  font-size: 8px;
+  line-height: 1;
+  color: var(--muted);
+}
+
+.lane-row-move button:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.lane-row-move button:disabled {
+  opacity: 0.25;
+  cursor: default;
 }
 
 .timeline-stage {

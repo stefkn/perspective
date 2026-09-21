@@ -30,7 +30,16 @@ import {
 } from "../lib/view-state";
 import { computeLabelBoxes, resolveLabelTargets } from "../lib/labels";
 import { isWebGL2Supported } from "../lib/webgl";
-import { LANES, layoutLaneBands, type LaneId } from "../lib/lanes";
+import {
+  LANES,
+  LANE_BY_ID,
+  LANE_SIZES,
+  defaultLaneConfigs,
+  layoutLaneBands,
+  type LaneConfig,
+  type LaneId,
+  type LaneSize,
+} from "../lib/lanes";
 import {
   loadOnThisDayEvents,
   OTD_DOT_SPAN_DAYS,
@@ -47,6 +56,72 @@ const Minimap = dynamic(() => import("./Minimap"), { ssr: false });
 
 const MAX_ZOOM = 16;
 const FIT_PAD = 1.15;
+
+const LANE_STORAGE_KEY = "perspective.lanes";
+
+function defaultLaneState(): {
+  order: LaneId[];
+  configs: Record<LaneId, LaneConfig>;
+} {
+  return { order: LANES.map((lane) => lane.id), configs: defaultLaneConfigs() };
+}
+
+function loadLaneState(): {
+  order: LaneId[];
+  configs: Record<LaneId, LaneConfig>;
+} {
+  const { order, configs } = defaultLaneState();
+
+  if (typeof window === "undefined") return { order, configs };
+
+  try {
+    const raw = window.localStorage.getItem(LANE_STORAGE_KEY);
+    if (!raw) return { order, configs };
+    const parsed = JSON.parse(raw) as {
+      order?: unknown;
+      configs?: Record<string, unknown>;
+    };
+
+    if (Array.isArray(parsed.order)) {
+      const validIds = parsed.order.filter(
+        (id): id is LaneId => typeof id === "string" && id in LANE_BY_ID,
+      );
+      const seen = new Set<LaneId>();
+      const merged: LaneId[] = [];
+      for (const id of validIds) {
+        if (!seen.has(id)) {
+          seen.add(id);
+          merged.push(id);
+        }
+      }
+      for (const id of order) {
+        if (!seen.has(id)) merged.push(id);
+      }
+      order.splice(0, order.length, ...merged);
+    }
+
+    if (parsed.configs && typeof parsed.configs === "object") {
+      for (const id of Object.keys(configs) as LaneId[]) {
+        const c = parsed.configs[id];
+        if (!c || typeof c !== "object") continue;
+        const entry = c as Partial<LaneConfig>;
+        if (typeof entry.visible === "boolean") configs[id].visible = entry.visible;
+        if (entry.side === -1 || entry.side === 1) configs[id].side = entry.side;
+        if (
+          entry.size === "compact" ||
+          entry.size === "normal" ||
+          entry.size === "large"
+        ) {
+          configs[id].size = entry.size;
+        }
+      }
+    }
+  } catch {
+    // Fall through to defaults on any parse error.
+  }
+
+  return { order, configs };
+}
 
 const INTRO_SPAN_YEARS = 70;
 const INTRO_DURATION_MS = 9000;
@@ -131,39 +206,93 @@ export default function TimelineApp() {
   const [otdShowcaseAlpha, setOtdShowcaseAlpha] = useState(0);
   const [introDone, setIntroDone] = useState(false);
 
-  const [visibility, setVisibility] = useState<Record<LaneId, boolean>>(() => {
-    const initial = {} as Record<LaneId, boolean>;
-    for (const lane of LANES) initial[lane.id] = lane.defaultVisible;
-    return initial;
-  });
+  const [laneState, setLaneState] = useState(defaultLaneState);
+  const [laneHydrated, setLaneHydrated] = useState(false);
+  const order = laneState.order;
+  const configs = laneState.configs;
 
-  const [expandedLaneId, setExpandedLaneId] = useState<LaneId | null>(null);
   const [perpOffset, setPerpOffset] = useState(0);
 
-  const toggleLane = useCallback((id: LaneId) => {
-    setVisibility((v) => {
-      const next = { ...v, [id]: !v[id] };
-      if (!next[id]) setExpandedLaneId((e) => (e === id ? null : e));
-      return next;
+  const updateLane = useCallback(
+    (id: LaneId, patch: Partial<LaneConfig>) => {
+      setLaneState((s) => ({
+        order: s.order,
+        configs: { ...s.configs, [id]: { ...s.configs[id], ...patch } },
+      }));
+    },
+    [],
+  );
+
+  const toggleLane = useCallback(
+    (id: LaneId) => updateLane(id, { visible: !configs[id].visible }),
+    [configs, updateLane],
+  );
+
+  const cycleLaneSize = useCallback((id: LaneId) => {
+    setLaneState((s) => {
+      const idx = LANE_SIZES.indexOf(s.configs[id].size);
+      const size = LANE_SIZES[(idx + 1) % LANE_SIZES.length];
+      return {
+        order: s.order,
+        configs: { ...s.configs, [id]: { ...s.configs[id], size } },
+      };
     });
   }, []);
 
-  const toggleExpanded = useCallback((id: LaneId) => {
-    setExpandedLaneId((e) => (e === id ? null : id));
+  const setLaneSize = useCallback(
+    (id: LaneId, size: LaneSize) => updateLane(id, { size }),
+    [updateLane],
+  );
+
+  const flipLaneSide = useCallback(
+    (id: LaneId) =>
+      updateLane(id, { side: (configs[id].side === -1 ? 1 : -1) as -1 | 1 }),
+    [configs, updateLane],
+  );
+
+  const moveLane = useCallback((id: LaneId, dir: -1 | 1) => {
+    setLaneState((s) => {
+      const idx = s.order.indexOf(id);
+      const j = idx + dir;
+      if (idx < 0 || j < 0 || j >= s.order.length) return s;
+      const order = [...s.order];
+      [order[idx], order[j]] = [order[j], order[idx]];
+      return { order, configs: s.configs };
+    });
   }, []);
 
   const visibleLanes = useMemo(
-    () => LANES.filter((lane) => visibility[lane.id]),
-    [visibility],
+    () =>
+      order
+        .filter((id) => configs[id].visible)
+        .map((id) => LANE_BY_ID[id]),
+    [order, configs],
   );
 
   const perpSize =
     orientation === "horizontal" ? size.height : size.width;
 
   const laneLayout = useMemo(
-    () => layoutLaneBands(visibleLanes, perpSize, expandedLaneId),
-    [visibleLanes, perpSize, expandedLaneId],
+    () => layoutLaneBands(visibleLanes, perpSize, configs),
+    [visibleLanes, perpSize, configs],
   );
+
+  useEffect(() => {
+    setLaneState(loadLaneState());
+    setLaneHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (!laneHydrated || typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(
+        LANE_STORAGE_KEY,
+        JSON.stringify({ order, configs }),
+      );
+    } catch {
+      // Ignore storage failures (private mode, quota, etc).
+    }
+  }, [laneHydrated, order, configs]);
 
   const clampPerp = useCallback(
     (offset: number) => {
@@ -511,7 +640,6 @@ export default function TimelineApp() {
 
   const resetView = useCallback(() => {
     setPerpOffset(0);
-    setExpandedLaneId(null);
 
     const extent = coordExtent[1] - coordExtent[0];
     const dim = orientation === "horizontal" ? size.width : size.height;
@@ -606,8 +734,13 @@ export default function TimelineApp() {
         </div>
         <LaneToggles
           lanes={LANES}
-          visibility={visibility}
+          order={order}
+          configs={configs}
+          orientation={orientation}
           onToggle={toggleLane}
+          onMove={moveLane}
+          onSetSize={setLaneSize}
+          onFlipSide={flipLaneSide}
         />
         <button className="app-reset" onClick={resetView}>
           Reset view
@@ -646,7 +779,7 @@ export default function TimelineApp() {
               onViewStateChange={handleViewStateChange}
               onResize={handleResize}
               onSelect={setSelectedEvent}
-              onExpandLane={toggleExpanded}
+              onCycleLane={cycleLaneSize}
             />
 
             <div className="minimap-wrap">
