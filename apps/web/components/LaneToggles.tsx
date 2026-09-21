@@ -3,22 +3,21 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   LANE_SIZES,
+  MAIN_AXIS_ID,
   type LaneConfig,
   type LaneDefinition,
   type LaneId,
+  type LaneItem,
   type LaneSize,
 } from "../lib/lanes";
-import type { Orientation } from "../lib/time-transform";
 
 interface LaneTogglesProps {
   lanes: LaneDefinition[];
-  order: LaneId[];
+  items: LaneItem[];
   configs: Record<LaneId, LaneConfig>;
-  orientation: Orientation;
   onToggle: (id: LaneId) => void;
-  onReorder: (id: LaneId, toIndex: number) => void;
+  onReorder: (item: LaneItem, toIndex: number) => void;
   onSetSize: (id: LaneId, size: LaneSize) => void;
-  onFlipSide: (id: LaneId) => void;
 }
 
 function rgb(color: [number, number, number]): string {
@@ -31,13 +30,8 @@ const SIZE_LABEL: Record<LaneSize, string> = {
   large: "L",
 };
 
-function sideLabel(orientation: Orientation, side: -1 | 1): string {
-  if (orientation === "horizontal") return side === -1 ? "Above" : "Below";
-  return side === -1 ? "Left" : "Right";
-}
-
 interface DragState {
-  id: LaneId;
+  id: LaneItem;
   pointerId: number;
   startIndex: number;
   index: number;
@@ -48,18 +42,16 @@ interface DragState {
 
 export default function LaneToggles({
   lanes,
-  order,
+  items,
   configs,
-  orientation,
   onToggle,
   onReorder,
   onSetSize,
-  onFlipSide,
 }: LaneTogglesProps) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
 
-  const [dragId, setDragId] = useState<LaneId | null>(null);
+  const [dragId, setDragId] = useState<LaneItem | null>(null);
   const [dragShift, setDragShift] = useState(0);
   const dragRef = useRef<DragState | null>(null);
 
@@ -75,7 +67,9 @@ export default function LaneToggles({
   }, [open]);
 
   const byId = new Map(lanes.map((lane) => [lane.id, lane]));
-  const visibleCount = order.filter((id) => configs[id].visible).length;
+  const visibleCount = items.filter(
+    (item) => item !== MAIN_AXIS_ID && configs[item].visible,
+  ).length;
 
   const stepSize = (id: LaneId, dir: -1 | 1) => {
     const idx = LANE_SIZES.indexOf(configs[id].size);
@@ -84,7 +78,7 @@ export default function LaneToggles({
   };
 
   const handleDragStart = useCallback(
-    (e: React.PointerEvent, id: LaneId, index: number) => {
+    (e: React.PointerEvent, item: LaneItem, index: number) => {
       if (e.pointerType === "mouse" && e.button !== 0) return;
       const row = (e.currentTarget as HTMLElement).closest(
         ".lane-row",
@@ -93,18 +87,18 @@ export default function LaneToggles({
       e.preventDefault();
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
       dragRef.current = {
-        id,
+        id: item,
         pointerId: e.pointerId,
         startIndex: index,
         index,
         pointerStartY: e.clientY,
         rowHeight,
-        count: order.length,
+        count: items.length,
       };
-      setDragId(id);
+      setDragId(item);
       setDragShift(0);
     },
-    [order.length],
+    [items.length],
   );
 
   const handleDragMove = useCallback(
@@ -132,17 +126,17 @@ export default function LaneToggles({
 
   const handleGripKeyDown = (
     e: React.KeyboardEvent,
-    id: LaneId,
+    item: LaneItem,
     index: number,
   ) => {
     let to: number | null = null;
     if (e.key === "ArrowUp") to = index - 1;
     else if (e.key === "ArrowDown") to = index + 1;
     else if (e.key === "Home") to = 0;
-    else if (e.key === "End") to = order.length - 1;
+    else if (e.key === "End") to = items.length - 1;
     if (to != null) {
       e.preventDefault();
-      if (to >= 0 && to < order.length) onReorder(id, to);
+      if (to >= 0 && to < items.length) onReorder(item, to);
     }
   };
 
@@ -159,17 +153,44 @@ export default function LaneToggles({
       {open && (
         <div className="lane-toggles-panel">
           <div className="lane-toggles-heading">Manage lanes</div>
-          {order.map((id, index) => {
-            const lane = byId.get(id);
+          {items.map((item, index) => {
+            const dragging = dragId === item;
+
+            if (item === MAIN_AXIS_ID) {
+              return (
+                <div
+                  key={item}
+                  className={`lane-row lane-row-main${dragging ? " dragging" : ""}`}
+                  style={
+                    dragging
+                      ? { transform: `translateY(${dragShift}px)` }
+                      : undefined
+                  }
+                >
+                  <button
+                    className="lane-row-grip"
+                    aria-label="Main timeline: drag to reposition"
+                    title="Drag to reposition"
+                    onPointerDown={(e) => handleDragStart(e, item, index)}
+                    onPointerMove={handleDragMove}
+                    onPointerUp={handleDragEnd}
+                    onPointerCancel={handleDragEnd}
+                    onKeyDown={(e) => handleGripKeyDown(e, item, index)}
+                  >
+                    ⋮⋮
+                  </button>
+                  <span className="lane-row-main-label">Main timeline</span>
+                </div>
+              );
+            }
+
+            const lane = byId.get(item);
             if (!lane) return null;
-            const cfg = configs[id];
-            const side = cfg.side;
+            const cfg = configs[item];
             const sizeLabel = SIZE_LABEL[cfg.size];
-            const otherSide = (side === -1 ? 1 : -1) as -1 | 1;
-            const dragging = dragId === id;
             return (
               <div
-                key={id}
+                key={item}
                 className={`lane-row${dragging ? " dragging" : ""}`}
                 style={
                   dragging
@@ -181,11 +202,11 @@ export default function LaneToggles({
                   className="lane-row-grip"
                   aria-label={`${lane.title}: drag to reorder`}
                   title="Drag to reorder"
-                  onPointerDown={(e) => handleDragStart(e, id, index)}
+                  onPointerDown={(e) => handleDragStart(e, item, index)}
                   onPointerMove={handleDragMove}
                   onPointerUp={handleDragEnd}
                   onPointerCancel={handleDragEnd}
-                  onKeyDown={(e) => handleGripKeyDown(e, id, index)}
+                  onKeyDown={(e) => handleGripKeyDown(e, item, index)}
                 >
                   ⋮⋮
                 </button>
@@ -196,14 +217,6 @@ export default function LaneToggles({
                 <span className="lane-row-title" title={lane.title}>
                   {lane.title}
                 </span>
-                <button
-                  className="lane-row-side"
-                  title={`Flip to ${sideLabel(orientation, otherSide)}`}
-                  aria-label={`${lane.title}: ${sideLabel(orientation, side)}, flip to ${sideLabel(orientation, otherSide)}`}
-                  onClick={() => onFlipSide(id)}
-                >
-                  {sideLabel(orientation, side)}
-                </button>
                 <div
                   className="lane-row-size"
                   role="group"
@@ -212,7 +225,7 @@ export default function LaneToggles({
                   <button
                     aria-label={`${lane.title}: smaller`}
                     disabled={cfg.size === LANE_SIZES[0]}
-                    onClick={() => stepSize(id, -1)}
+                    onClick={() => stepSize(item, -1)}
                   >
                     −
                   </button>
@@ -222,7 +235,7 @@ export default function LaneToggles({
                   <button
                     aria-label={`${lane.title}: larger`}
                     disabled={cfg.size === LANE_SIZES[LANE_SIZES.length - 1]}
-                    onClick={() => stepSize(id, 1)}
+                    onClick={() => stepSize(item, 1)}
                   >
                     +
                   </button>
@@ -232,7 +245,7 @@ export default function LaneToggles({
                   className="lane-row-visible"
                   checked={cfg.visible}
                   aria-label={`Show ${lane.title}`}
-                  onChange={() => onToggle(id)}
+                  onChange={() => onToggle(item)}
                 />
               </div>
             );

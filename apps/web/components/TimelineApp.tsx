@@ -34,10 +34,13 @@ import {
   LANES,
   LANE_BY_ID,
   LANE_SIZES,
+  MAIN_AXIS_ID,
   defaultLaneConfigs,
+  defaultLaneItems,
   layoutLaneBands,
   type LaneConfig,
   type LaneId,
+  type LaneItem,
   type LaneSize,
 } from "../lib/lanes";
 import {
@@ -60,44 +63,53 @@ const FIT_PAD = 1.15;
 const LANE_STORAGE_KEY = "perspective.lanes";
 
 function defaultLaneState(): {
-  order: LaneId[];
+  items: LaneItem[];
   configs: Record<LaneId, LaneConfig>;
 } {
-  return { order: LANES.map((lane) => lane.id), configs: defaultLaneConfigs() };
+  return { items: defaultLaneItems(), configs: defaultLaneConfigs() };
 }
 
 function loadLaneState(): {
-  order: LaneId[];
+  items: LaneItem[];
   configs: Record<LaneId, LaneConfig>;
 } {
-  const { order, configs } = defaultLaneState();
+  const { items, configs } = defaultLaneState();
 
-  if (typeof window === "undefined") return { order, configs };
+  if (typeof window === "undefined") return { items, configs };
 
   try {
     const raw = window.localStorage.getItem(LANE_STORAGE_KEY);
-    if (!raw) return { order, configs };
+    if (!raw) return { items, configs };
     const parsed = JSON.parse(raw) as {
-      order?: unknown;
+      items?: unknown;
       configs?: Record<string, unknown>;
     };
 
-    if (Array.isArray(parsed.order)) {
-      const validIds = parsed.order.filter(
-        (id): id is LaneId => typeof id === "string" && id in LANE_BY_ID,
+    if (Array.isArray(parsed.items)) {
+      const valid = parsed.items.filter(
+        (item): item is LaneItem =>
+          item === MAIN_AXIS_ID ||
+          (typeof item === "string" && item in LANE_BY_ID),
       );
-      const seen = new Set<LaneId>();
-      const merged: LaneId[] = [];
-      for (const id of validIds) {
-        if (!seen.has(id)) {
-          seen.add(id);
-          merged.push(id);
+      const seen = new Set<LaneItem>();
+      const merged: LaneItem[] = [];
+      for (const item of valid) {
+        if (item === MAIN_AXIS_ID) {
+          if (!seen.has(item)) {
+            seen.add(item);
+            merged.push(item);
+          }
+          continue;
+        }
+        if (!seen.has(item)) {
+          seen.add(item);
+          merged.push(item);
         }
       }
-      for (const id of order) {
-        if (!seen.has(id)) merged.push(id);
+      for (const item of items) {
+        if (!seen.has(item)) merged.push(item);
       }
-      order.splice(0, order.length, ...merged);
+      items.splice(0, items.length, ...merged);
     }
 
     if (parsed.configs && typeof parsed.configs === "object") {
@@ -106,7 +118,6 @@ function loadLaneState(): {
         if (!c || typeof c !== "object") continue;
         const entry = c as Partial<LaneConfig>;
         if (typeof entry.visible === "boolean") configs[id].visible = entry.visible;
-        if (entry.side === -1 || entry.side === 1) configs[id].side = entry.side;
         if (
           entry.size === "compact" ||
           entry.size === "normal" ||
@@ -120,7 +131,7 @@ function loadLaneState(): {
     // Fall through to defaults on any parse error.
   }
 
-  return { order, configs };
+  return { items, configs };
 }
 
 const INTRO_SPAN_YEARS = 70;
@@ -208,7 +219,7 @@ export default function TimelineApp() {
 
   const [laneState, setLaneState] = useState(defaultLaneState);
   const [laneHydrated, setLaneHydrated] = useState(false);
-  const order = laneState.order;
+  const items = laneState.items;
   const configs = laneState.configs;
 
   const [perpOffset, setPerpOffset] = useState(0);
@@ -216,7 +227,7 @@ export default function TimelineApp() {
   const updateLane = useCallback(
     (id: LaneId, patch: Partial<LaneConfig>) => {
       setLaneState((s) => ({
-        order: s.order,
+        items: s.items,
         configs: { ...s.configs, [id]: { ...s.configs[id], ...patch } },
       }));
     },
@@ -233,7 +244,7 @@ export default function TimelineApp() {
       const idx = LANE_SIZES.indexOf(s.configs[id].size);
       const size = LANE_SIZES[(idx + 1) % LANE_SIZES.length];
       return {
-        order: s.order,
+        items: s.items,
         configs: { ...s.configs, [id]: { ...s.configs[id], size } },
       };
     });
@@ -244,39 +255,49 @@ export default function TimelineApp() {
     [updateLane],
   );
 
-  const flipLaneSide = useCallback(
-    (id: LaneId) =>
-      updateLane(id, { side: (configs[id].side === -1 ? 1 : -1) as -1 | 1 }),
-    [configs, updateLane],
-  );
-
-  const reorderLane = useCallback((id: LaneId, toIndex: number) => {
+  const reorderItem = useCallback((item: LaneItem, toIndex: number) => {
     setLaneState((s) => {
-      const from = s.order.indexOf(id);
+      const from = s.items.indexOf(item);
       if (from < 0) return s;
-      const clamped = Math.min(Math.max(toIndex, 0), s.order.length - 1);
+      const clamped = Math.min(Math.max(toIndex, 0), s.items.length - 1);
       if (from === clamped) return s;
-      const order = [...s.order];
-      order.splice(from, 1);
-      order.splice(clamped, 0, id);
-      return { order, configs: s.configs };
+      const items = [...s.items];
+      items.splice(from, 1);
+      items.splice(clamped, 0, item);
+      return { items, configs: s.configs };
     });
   }, []);
 
+  const laneSides = useMemo(() => {
+    const sides = {} as Record<LaneId, -1 | 1>;
+    let side: -1 | 1 = -1;
+    for (const item of items) {
+      if (item === MAIN_AXIS_ID) {
+        side = 1;
+        continue;
+      }
+      sides[item] = side;
+    }
+    return sides;
+  }, [items]);
+
   const visibleLanes = useMemo(
     () =>
-      order
-        .filter((id) => configs[id].visible)
+      items
+        .filter(
+          (item): item is LaneId =>
+            item !== MAIN_AXIS_ID && configs[item].visible,
+        )
         .map((id) => LANE_BY_ID[id]),
-    [order, configs],
+    [items, configs],
   );
 
   const perpSize =
     orientation === "horizontal" ? size.height : size.width;
 
   const laneLayout = useMemo(
-    () => layoutLaneBands(visibleLanes, perpSize, configs),
-    [visibleLanes, perpSize, configs],
+    () => layoutLaneBands(visibleLanes, perpSize, configs, laneSides),
+    [visibleLanes, perpSize, configs, laneSides],
   );
 
   useEffect(() => {
@@ -289,12 +310,12 @@ export default function TimelineApp() {
     try {
       window.localStorage.setItem(
         LANE_STORAGE_KEY,
-        JSON.stringify({ order, configs }),
+        JSON.stringify({ items, configs }),
       );
     } catch {
       // Ignore storage failures (private mode, quota, etc).
     }
-  }, [laneHydrated, order, configs]);
+  }, [laneHydrated, items, configs]);
 
   const clampPerp = useCallback(
     (offset: number) => {
@@ -736,13 +757,11 @@ export default function TimelineApp() {
         </div>
         <LaneToggles
           lanes={LANES}
-          order={order}
+          items={items}
           configs={configs}
-          orientation={orientation}
           onToggle={toggleLane}
-          onReorder={reorderLane}
+          onReorder={reorderItem}
           onSetSize={setLaneSize}
-          onFlipSide={flipLaneSide}
         />
         <button className="app-reset" onClick={resetView}>
           Reset view

@@ -123,16 +123,23 @@ export interface LaneDefinition {
   defaultVisible: boolean;
 }
 
-// Per-user, per-lane settings: visibility, which side of the axis it sits on,
-// and how much perpendicular space it gets.
+// Sentinel id for the fixed "main timeline" divider in the ordered lane list.
+// Lanes before it sit on one side of the axis, lanes after it on the other, so
+// the list order is exactly the on-screen order (no separate side setting).
+export const MAIN_AXIS_ID = "main" as const;
+
+export type LaneItem = LaneId | typeof MAIN_AXIS_ID;
+
+// Per-user, per-lane settings: visibility and how much perpendicular space it
+// gets. Side is derived from the lane's position relative to MAIN_AXIS_ID.
 export interface LaneConfig {
   visible: boolean;
-  side: -1 | 1;
   size: LaneSize;
 }
 
-// Registry of toggleable lanes. Order defines the initial stacking order; the
-// user can reorder lanes, so this array is the seed, not the source of truth.
+// Registry of toggleable lanes. `defaultSide` seeds where the lane starts
+// relative to the main axis; the user can reorder lanes (and the divider), so
+// this array is the seed, not the source of truth.
 export const LANES: LaneDefinition[] = [
   { id: "population", title: "World population", kind: "series", defaultSide: -1, color: [255, 209, 102], defaultVisible: false },
   { id: "energy", title: "Primary energy", kind: "stacked", defaultSide: -1, color: [220, 220, 230], defaultVisible: false },
@@ -151,7 +158,6 @@ export const LANE_BY_ID: Record<LaneId, LaneDefinition> = Object.fromEntries(
 export function defaultLaneConfig(lane: LaneDefinition): LaneConfig {
   return {
     visible: lane.defaultVisible,
-    side: lane.defaultSide,
     size: "normal",
   };
 }
@@ -162,25 +168,37 @@ export function defaultLaneConfigs(): Record<LaneId, LaneConfig> {
   return configs;
 }
 
+// Initial ordered item list: lanes grouped by their default side, with the
+// main-axis divider between the two groups.
+export function defaultLaneItems(): LaneItem[] {
+  return [
+    ...LANES.filter((lane) => lane.defaultSide === -1).map((lane) => lane.id),
+    MAIN_AXIS_ID,
+    ...LANES.filter((lane) => lane.defaultSide === 1).map((lane) => lane.id),
+  ];
+}
+
 export interface LaneLayout {
   bands: Record<LaneId, LaneBand>;
   negExtent: number;
   posExtent: number;
 }
 
-// Lay out visible lanes into perpendicular bands. Each lane's side and size
-// come from its config, so ordering (the order of `lanes`), the axis side, and
-// the per-lane size are all user-controlled. Overflow is reached by panning.
+// Lay out visible lanes into perpendicular bands. Ordering (the order of
+// `lanes`) determines stacking within a side, `sides` places each lane relative
+// to the axis, and `configs` supplies the per-lane size. Overflow is reached
+// by panning.
 export function layoutLaneBands(
   lanes: LaneDefinition[],
   perpSize: number,
   configs: Record<LaneId, LaneConfig>,
+  sides: Record<LaneId, -1 | 1>,
 ): LaneLayout {
   const bands = {} as Record<LaneId, LaneBand>;
   const halfPerSide = { [-1]: 0, [1]: 0 } as Record<-1 | 1, number>;
 
   for (const side of [-1, 1] as const) {
-    const sideLanes = lanes.filter((l) => configs[l.id].side === side);
+    const sideLanes = lanes.filter((l) => sides[l.id] === side);
     if (sideLanes.length === 0) continue;
 
     let cursor = MAIN_AXIS_HALF + LANE_GAP;

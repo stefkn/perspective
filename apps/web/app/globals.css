@@ -242,19 +242,27 @@ button {
   text-overflow: ellipsis;
 }
 
-.lane-row-side {
-  background: transparent;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 3px 7px;
+.lane-row-main {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.lane-row-main-label {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-size: 11px;
   color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
   white-space: nowrap;
 }
 
-.lane-row-side:hover {
-  border-color: var(--accent);
-  color: var(--accent);
+.lane-row-main-label::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border);
 }
 
 .lane-row-size {
