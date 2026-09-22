@@ -34,20 +34,6 @@ export default function EventDetail({ event, onClose }: EventDetailProps) {
       <div className="event-detail-year">{shown}</div>
       <h2 className="event-detail-title">{event.title}</h2>
       <p className="event-detail-desc">{event.description}</p>
-      {event.significance != null && (
-        <div className="event-detail-sig">
-          <span className="event-detail-sig-label">Significance</span>
-          <div className="event-detail-sig-track">
-            <div
-              className="event-detail-sig-fill"
-              style={{ width: `${Math.round(event.significance * 100)}%` }}
-            />
-          </div>
-          <span className="event-detail-sig-value">
-            {Math.round(event.significance * 100)}%
-          </span>
-        </div>
-      )}
       {event.wikipediaUrl && (
         <a
           className="event-detail-link"
