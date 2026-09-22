@@ -1,0 +1,21 @@
+{
+  "name": "ingestion",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "extract": "tsx src/extract.ts",
+    "extract:people": "tsx src/extract.ts person",
+    "score": "tsx src/score.ts",
+    "infobox": "tsx src/infobox.ts",
+    "enrich": "tsx src/enrich.ts",
+    "emit": "tsx src/emit.ts",
+    "validate": "tsx src/validate.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "tsx": "^4.19.0",
+    "typescript": "^5"
+  }
+}

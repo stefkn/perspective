@@ -6,3 +6,4 @@ allowBuilds:
   sharp: false
   unrs-resolver: false
   '@vaadin/vaadin-usage-statistics': false
+  esbuild: false
