@@ -6,6 +6,11 @@ export interface Interval {
   startYear: number;
   endYear: number;
   estimated?: boolean;
+  // Detail fields carried through so the info box can be opened from a tap on
+  // the entity's label/band.
+  description?: string;
+  significance?: number;
+  wikipediaUrl?: string | null;
 }
 
 export interface AssignedInterval<T extends Interval = Interval> {
@@ -108,6 +113,7 @@ export type LaneId =
   | "co2"
   | "powers"
   | "people"
+  | "wars"
   | "culture"
   | "life-expectancy"
   | "gdp";
@@ -146,6 +152,7 @@ export const LANES: LaneDefinition[] = [
   { id: "co2", title: "CO2 emissions", kind: "series", defaultSide: -1, color: [226, 96, 72], defaultVisible: false },
   { id: "powers", title: "Major world powers", kind: "intervals", defaultSide: 1, color: [86, 200, 178], defaultVisible: false },
   { id: "people", title: "Notable lifespans", kind: "intervals", defaultSide: -1, color: [214, 150, 236], defaultVisible: true },
+  { id: "wars", title: "Wars", kind: "intervals", defaultSide: 1, color: [226, 110, 110], defaultVisible: false },
   { id: "culture", title: "Cultural works", kind: "intervals", defaultSide: 1, color: [240, 180, 90], defaultVisible: false },
   { id: "life-expectancy", title: "Life expectancy", kind: "series", defaultSide: 1, color: [126, 199, 106], defaultVisible: false },
   { id: "gdp", title: "Global GDP", kind: "series", defaultSide: 1, color: [109, 165, 240], defaultVisible: false },

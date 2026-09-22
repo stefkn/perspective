@@ -9,8 +9,8 @@ import {
   useState,
 } from "react";
 import dynamic from "next/dynamic";
-import { EVENTS } from "../lib/events";
-import type { TimelineEvent } from "../lib/types";
+import { EVENTS } from "../lib/entities-data";
+import type { TimelineEvent, EntityDetail } from "../lib/types";
 import {
   yearToCoord,
   coordToYear,
@@ -209,7 +209,7 @@ export default function TimelineApp() {
   const fittedRef = useRef(false);
   const lastViewStateRef = useRef<{ center: number; zoom: number; perp: number } | null>(null);
 
-  const [selectedEvent, setSelectedEvent] = useState<TimelineEvent | null>(null);
+  const [selectedEvent, setSelectedEvent] = useState<EntityDetail | null>(null);
   const selectedId = selectedEvent?.id ?? null;
   const [onThisDayEvents, setOnThisDayEvents] = useState<TimelineEvent[]>([]);
   const [webglSupported, setWebglSupported] = useState(true);

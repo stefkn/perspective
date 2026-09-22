@@ -8,7 +8,7 @@ import {
   ScatterplotLayer,
   TextLayer,
 } from "@deck.gl/layers";
-import type { TimelineEvent } from "../lib/types";
+import type { TimelineEvent, EntityDetail } from "../lib/types";
 import {
   yearToCoord,
   coordToYear,
@@ -72,7 +72,7 @@ interface TimelineProps {
   showOtdLabels: boolean;
   otdLabelAlpha: number;
   otdLabelSampleCount: number;
-  selectedEvent: TimelineEvent | null;
+  selectedEvent: EntityDetail | null;
   lanes: LaneDefinition[];
   laneBands: Record<LaneId, LaneBand>;
   orientation: Orientation;
@@ -85,7 +85,7 @@ interface TimelineProps {
   visiblePerpRange: [number, number] | null;
   onViewStateChange: (vs: TimeViewState) => void;
   onResize: (size: { width: number; height: number }) => void;
-  onSelect: (event: TimelineEvent | null) => void;
+  onSelect: (detail: EntityDetail | null) => void;
   onCycleLane: (id: LaneId) => void;
 }
 
@@ -281,6 +281,7 @@ export default function Timeline({
           orientation === "horizontal" ? 20 : PORTRAIT_LABEL_CLEARANCE,
         ),
         text: event.title,
+        event,
       },
     ];
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -288,10 +289,14 @@ export default function Timeline({
 
   const selectionPin = useMemo(() => {
     if (!selectedEvent) return null;
+    const year = selectedEvent.year ?? selectedEvent.startYear;
+    if (year == null) return null;
     const zoom =
       orientation === "horizontal" ? viewState.zoomX : viewState.zoomY;
-    const spread = otdDotSpreadPx(selectedEvent.dayIndex) / Math.pow(2, zoom);
-    const coord = yearToCoord(selectedEvent.year, scale) + spread;
+    const dayIndex = (selectedEvent as TimelineEvent).dayIndex;
+    const spread =
+      dayIndex != null ? otdDotSpreadPx(dayIndex) / Math.pow(2, zoom) : 0;
+    const coord = yearToCoord(year, scale) + spread;
     const fill: [number, number, number, number] =
       selectedEvent.significance != null
         ? significanceColor(selectedEvent.significance, 1)
@@ -512,7 +517,7 @@ export default function Timeline({
         getSize: 13,
         fontFamily: "ui-sans-serif, system-ui, -apple-system, sans-serif",
         characterSet: "auto",
-        pickable: false,
+        pickable: true,
         parameters: { depthTest: false },
       }),
       new ScatterplotLayer({
@@ -574,7 +579,7 @@ export default function Timeline({
         getSize: 12,
         fontFamily: "ui-sans-serif, system-ui, -apple-system, sans-serif",
         characterSet: "auto",
-        pickable: false,
+        pickable: true,
         parameters: { depthTest: false },
       }),
       new TextLayer({
@@ -596,7 +601,7 @@ export default function Timeline({
         getSize: 13,
         fontFamily: "ui-sans-serif, system-ui, -apple-system, sans-serif",
         characterSet: "auto",
-        pickable: false,
+        pickable: true,
         parameters: { depthTest: false },
       }),
       new ScatterplotLayer({
@@ -690,7 +695,10 @@ export default function Timeline({
           onCycleLane(laneId);
           return;
         }
-        onSelect(info.object?.event ?? null);
+        const obj = info.object as
+          | { event?: TimelineEvent; detail?: EntityDetail }
+          | null;
+        onSelect(obj?.detail ?? obj?.event ?? null);
       }}
       getCursor={({ isDragging, isHovering }) =>
         isDragging ? "grabbing" : isHovering ? "pointer" : "grab"

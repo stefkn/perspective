@@ -44,10 +44,8 @@ import {
   formatEnergy,
   type EnergyPoint,
 } from "../lib/energy";
-import { PERIODS } from "../lib/periods";
-import { POWERS } from "../lib/powers";
-import { PEOPLE } from "../lib/people";
-import { CULTURE } from "../lib/culture";
+import { PERIODS, POWERS, PEOPLE, WARS, CULTURE } from "../lib/entities-data";
+import type { EntityDetail } from "../lib/types";
 
 const MONO = "ui-monospace, SFMono-Regular, Menlo, monospace";
 const SANS = "ui-sans-serif, system-ui, -apple-system, sans-serif";
@@ -74,10 +72,17 @@ const CULTURE_LABEL: [number, number, number, number] = [246, 210, 150, 220];
 const CULTURE_EST_FILL: [number, number, number, number] = [240, 180, 90, 12];
 const CULTURE_EST_STROKE: [number, number, number, number] = [244, 196, 122, 180];
 
+const WARS_FILL: [number, number, number, number] = [226, 110, 110, 34];
+const WARS_STROKE: [number, number, number, number] = [238, 138, 138, 110];
+const WARS_LABEL: [number, number, number, number] = [240, 158, 158, 220];
+const WARS_EST_FILL: [number, number, number, number] = [226, 110, 110, 12];
+const WARS_EST_STROKE: [number, number, number, number] = [238, 138, 138, 170];
+
 const PERIOD_THICKNESS = 8;
 const POWERS_THICKNESS = 8;
 const PEOPLE_THICKNESS = 6;
 const CULTURE_THICKNESS = 6;
+const WARS_THICKNESS = 6;
 
 const DASH_EXTENSION = new PathStyleExtension({ dash: true });
 const INTERVAL_BAND: LaneBand = { center: 0, half: 0 };
@@ -91,6 +96,7 @@ interface LaneLabel {
   anchor: Anchor;
   baseline: Baseline;
   color?: [number, number, number, number];
+  detail?: EntityDetail;
 }
 
 // Choose an anchor that keeps a label from spilling off the edge of the screen.
@@ -167,6 +173,7 @@ interface IntervalLabelCandidate {
   text: string;
   coord: number;
   perp: number;
+  interval: Interval;
 }
 
 interface ScreenBox {
@@ -375,6 +382,20 @@ function staggerIntervalLabels(
   return result;
 }
 
+// Build an EntityDetail for the info box from an interval.
+function intervalDetail(interval: Interval): EntityDetail {
+  return {
+    id: interval.id,
+    title: interval.title,
+    description: interval.description ?? "",
+    significance: interval.significance,
+    wikipediaUrl: interval.wikipediaUrl ?? null,
+    startYear: interval.startYear,
+    endYear: interval.endYear,
+    estimated: interval.estimated,
+  };
+}
+
 // Build stacked interval bands (polygons + labels) for a lane or the main axis.
 export function buildIntervalBands<T extends Interval = Interval>(
   opts: IntervalBandOptions<T>,
@@ -468,6 +489,7 @@ export function buildIntervalBands<T extends Interval = Interval>(
       text: displayTitle,
       coord,
       perp: orientation === "horizontal" ? off : off + thickness / 2 + 5,
+      interval,
     });
   }
 
@@ -485,6 +507,7 @@ export function buildIntervalBands<T extends Interval = Interval>(
     text: label.text,
     anchor,
     baseline: "center",
+    detail: intervalDetail(label.interval),
   }));
 
   const leaderLines = labelCandidates.flatMap((label, i) => {
@@ -551,7 +574,7 @@ export function buildIntervalBands<T extends Interval = Interval>(
       getSize: 11,
       fontFamily: SANS,
       characterSet: "auto",
-      pickable: false,
+      pickable: true,
       parameters: { depthTest: false },
     }),
   ];
@@ -1020,6 +1043,28 @@ export function buildLaneLayers(
       visiblePerpRange: opts.visiblePerpRange,
     });
   }
+  if (lane.id === "wars") {
+    return buildIntervalBands({
+      id: "wars",
+      assigned: assignIntervalLanes(WARS),
+      orientation: opts.orientation,
+      scale: opts.scale,
+      coordExtent: opts.coordExtent,
+      band,
+      thickness: WARS_THICKNESS,
+      timeZoom: opts.timeZoom,
+      fillColor: WARS_FILL,
+      strokeColor: WARS_STROKE,
+      labelColor: WARS_LABEL,
+      estimateFillColor: WARS_EST_FILL,
+      estimateStrokeColor: WARS_EST_STROKE,
+      dashedEstimated: true,
+      title: "Wars",
+      laneId: "wars",
+      visibleCoordRange: opts.visibleCoordRange,
+      visiblePerpRange: opts.visiblePerpRange,
+    });
+  }
   return buildIntervalBands({
     id: "powers",
     assigned: assignIntervalLanes(POWERS),
@@ -1031,10 +1076,10 @@ export function buildLaneLayers(
     timeZoom: opts.timeZoom,
     fillColor: POWERS_FILL,
     strokeColor: POWERS_STROKE,
-    labelColor: POWERS_LABEL,
-    title: "Major world powers",
-    laneId: "powers",
-    visibleCoordRange: opts.visibleCoordRange,
+      labelColor: POWERS_LABEL,
+      title: "Major world powers",
+      laneId: "powers",
+      visibleCoordRange: opts.visibleCoordRange,
     visiblePerpRange: opts.visiblePerpRange,
   });
 }
