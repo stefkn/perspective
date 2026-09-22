@@ -163,7 +163,6 @@ interface IntervalBandOptions<T extends Interval = Interval> {
   estimateStrokeColor?: [number, number, number, number];
   dashedEstimated?: boolean;
   title?: string;
-  laneId?: string;
   visibleCoordRange?: [number, number];
   visiblePerpRange?: [number, number];
 }
@@ -416,7 +415,6 @@ export function buildIntervalBands<T extends Interval = Interval>(
     estimateStrokeColor,
     dashedEstimated,
     title,
-    laneId,
     visibleCoordRange,
     visiblePerpRange,
   } = opts;
@@ -451,9 +449,7 @@ export function buildIntervalBands<T extends Interval = Interval>(
         [off - t, y1],
       ];
     }
-    return laneId
-      ? { polygon, laneId, estimated: interval.estimated }
-      : { polygon, estimated: interval.estimated };
+    return { polygon, estimated: interval.estimated };
   });
 
   const viewport =
@@ -541,7 +537,7 @@ export function buildIntervalBands<T extends Interval = Interval>(
       getLineColor: (d) => (d.estimated ? estimateStroke : strokeColor),
       getLineWidth: 1,
       lineWidthMinPixels: 1,
-      pickable: !!laneId,
+      pickable: false,
       extensions: dashedEstimated ? [DASH_EXTENSION] : [],
       getDashArray: dashedEstimated
         ? (d: { estimated?: boolean }) =>
@@ -754,28 +750,28 @@ function buildSeriesLane(
   return [
     new PolygonLayer({
       id: `${id}-area`,
-      data: [{ polygon: areaPolygon, laneId: id }],
+      data: [{ polygon: areaPolygon }],
       getPolygon: (d) => d.polygon,
       filled: true,
       getFillColor: areaColor,
-      pickable: true,
+      pickable: false,
       parameters: { depthTest: false },
     }),
     new PathLayer({
       id: `${id}-line`,
-      data: [{ path, laneId: id }],
+      data: [{ path }],
       getPath: (d) => d.path,
       getColor: lineColor,
       widthUnits: "pixels",
       getWidth: 2,
-      pickable: true,
+      pickable: false,
       parameters: { depthTest: false },
     }),
     ...(estimatedPath.length
       ? [
           new PathLayer({
             id: `${id}-estimated`,
-            data: [{ path: estimatedPath, laneId: id }],
+            data: [{ path: estimatedPath }],
             getPath: (d) => d.path,
             getColor: estimateColor,
             widthUnits: "pixels",
@@ -832,7 +828,6 @@ function buildEnergyLane(
     polygon: [number, number][];
     fill: [number, number, number, number];
     line: [number, number, number, number];
-    laneId: string;
   }[] = [];
 
   for (let si = 0; si < ENERGY_SOURCES.length; si++) {
@@ -859,7 +854,6 @@ function buildEnergyLane(
         ],
         fill: [source.color[0], source.color[1], source.color[2], 150],
         line: [source.color[0], source.color[1], source.color[2], 210],
-        laneId: "energy",
       });
     }
   }
@@ -928,14 +922,14 @@ function buildEnergyLane(
       getLineColor: (d) => d.line,
       getLineWidth: 1,
       lineWidthMinPixels: 1,
-      pickable: true,
+      pickable: false,
       parameters: { depthTest: false },
     }),
     ...(estimatedEnergyPath.length
       ? [
           new PathLayer({
             id: "energy-estimated",
-            data: [{ path: estimatedEnergyPath, laneId: "energy" }],
+            data: [{ path: estimatedEnergyPath }],
             getPath: (d) => d.path,
             getColor: [220, 220, 230, 170],
             widthUnits: "pixels",
@@ -1016,7 +1010,6 @@ export function buildLaneLayers(
       estimateStrokeColor: PEOPLE_EST_STROKE,
       dashedEstimated: true,
       title: "Notable lifespans",
-      laneId: "people",
       visibleCoordRange: opts.visibleCoordRange,
       visiblePerpRange: opts.visiblePerpRange,
     });
@@ -1038,7 +1031,6 @@ export function buildLaneLayers(
       estimateStrokeColor: CULTURE_EST_STROKE,
       dashedEstimated: true,
       title: "Cultural works",
-      laneId: "culture",
       visibleCoordRange: opts.visibleCoordRange,
       visiblePerpRange: opts.visiblePerpRange,
     });
@@ -1060,7 +1052,6 @@ export function buildLaneLayers(
       estimateStrokeColor: WARS_EST_STROKE,
       dashedEstimated: true,
       title: "Wars",
-      laneId: "wars",
       visibleCoordRange: opts.visibleCoordRange,
       visiblePerpRange: opts.visiblePerpRange,
     });
@@ -1078,7 +1069,6 @@ export function buildLaneLayers(
     strokeColor: POWERS_STROKE,
       labelColor: POWERS_LABEL,
       title: "Major world powers",
-      laneId: "powers",
       visibleCoordRange: opts.visibleCoordRange,
     visiblePerpRange: opts.visiblePerpRange,
   });

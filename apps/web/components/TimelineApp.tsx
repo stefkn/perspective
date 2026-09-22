@@ -33,7 +33,6 @@ import { isWebGL2Supported } from "../lib/webgl";
 import {
   LANES,
   LANE_BY_ID,
-  LANE_SIZES,
   MAIN_AXIS_ID,
   defaultLaneConfigs,
   defaultLaneItems,
@@ -238,17 +237,6 @@ export default function TimelineApp() {
     (id: LaneId) => updateLane(id, { visible: !configs[id].visible }),
     [configs, updateLane],
   );
-
-  const cycleLaneSize = useCallback((id: LaneId) => {
-    setLaneState((s) => {
-      const idx = LANE_SIZES.indexOf(s.configs[id].size);
-      const size = LANE_SIZES[(idx + 1) % LANE_SIZES.length];
-      return {
-        items: s.items,
-        configs: { ...s.configs, [id]: { ...s.configs[id], size } },
-      };
-    });
-  }, []);
 
   const setLaneSize = useCallback(
     (id: LaneId, size: LaneSize) => updateLane(id, { size }),
@@ -800,7 +788,6 @@ export default function TimelineApp() {
               onViewStateChange={handleViewStateChange}
               onResize={handleResize}
               onSelect={setSelectedEvent}
-              onCycleLane={cycleLaneSize}
             />
 
             <div className="minimap-wrap">

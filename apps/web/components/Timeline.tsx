@@ -86,7 +86,6 @@ interface TimelineProps {
   onViewStateChange: (vs: TimeViewState) => void;
   onResize: (size: { width: number; height: number }) => void;
   onSelect: (detail: EntityDetail | null) => void;
-  onCycleLane: (id: LaneId) => void;
 }
 
 export default function Timeline({
@@ -110,7 +109,6 @@ export default function Timeline({
   onViewStateChange,
   onResize,
   onSelect,
-  onCycleLane,
 }: TimelineProps) {
   const offset = (coord: number, perp: number): [number, number, number] =>
     timeOffset(coord, perp, orientation);
@@ -690,11 +688,6 @@ export default function Timeline({
         setHoveredId(obj?.otd ? obj.event?.id ?? null : null);
       }}
       onClick={(info) => {
-        const laneId = info.object?.laneId as LaneId | undefined;
-        if (laneId) {
-          onCycleLane(laneId);
-          return;
-        }
         const obj = info.object as
           | { event?: TimelineEvent; detail?: EntityDetail }
           | null;
