@@ -386,6 +386,32 @@ button {
   backdrop-filter: blur(8px);
 }
 
+.aggregate-tooltip {
+  position: absolute;
+  z-index: 11;
+  max-width: 280px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(8px);
+  pointer-events: none;
+}
+
+.aggregate-tooltip-count {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 3px;
+}
+
+.aggregate-tooltip-names {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
 .event-detail-close {
   position: absolute;
   top: 10px;

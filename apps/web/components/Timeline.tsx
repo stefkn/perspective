@@ -8,7 +8,7 @@ import {
   ScatterplotLayer,
   TextLayer,
 } from "@deck.gl/layers";
-import type { TimelineEvent, EntityDetail } from "../lib/types";
+import type { TimelineEvent, EntityDetail, AggregateInfo } from "../lib/types";
 import {
   yearToCoord,
   coordToYear,
@@ -89,6 +89,16 @@ interface TimelineProps {
   onViewStateChange: (vs: TimeViewState) => void;
   onResize: (size: { width: number; height: number }) => void;
   onSelect: (detail: EntityDetail | null) => void;
+  onAggregateNavigate: (startYear: number, endYear: number) => void;
+  onHoverAggregate: (
+    info: {
+      x: number;
+      y: number;
+      count: number;
+      names: string[];
+      unitNoun?: string;
+    } | null,
+  ) => void;
 }
 
 export default function Timeline({
@@ -112,6 +122,8 @@ export default function Timeline({
   onViewStateChange,
   onResize,
   onSelect,
+  onAggregateNavigate,
+  onHoverAggregate,
 }: TimelineProps) {
   const offset = (coord: number, perp: number): [number, number, number] =>
     timeOffset(coord, perp, orientation);
@@ -700,13 +712,34 @@ export default function Timeline({
       }}
       onResize={onResize}
       onHover={(info) => {
-        const obj = info.object as { otd?: boolean; event?: TimelineEvent } | null;
+        const obj = info.object as
+          | { otd?: boolean; event?: TimelineEvent; aggregate?: AggregateInfo }
+          | null;
         setHoveredId(obj?.otd ? obj.event?.id ?? null : null);
+        if (obj?.aggregate) {
+          onHoverAggregate({
+            x: info.x,
+            y: info.y,
+            count: obj.aggregate.count,
+            names: obj.aggregate.names,
+            unitNoun: obj.aggregate.unitNoun,
+          });
+        } else {
+          onHoverAggregate(null);
+        }
       }}
       onClick={(info) => {
         const obj = info.object as
-          | { event?: TimelineEvent; detail?: EntityDetail }
+          | {
+              event?: TimelineEvent;
+              detail?: EntityDetail;
+              aggregate?: AggregateInfo;
+            }
           | null;
+        if (obj?.aggregate) {
+          onAggregateNavigate(obj.aggregate.startYear, obj.aggregate.endYear);
+          return;
+        }
         onSelect(obj?.detail ?? obj?.event ?? null);
       }}
       getCursor={({ isDragging, isHovering }) =>
