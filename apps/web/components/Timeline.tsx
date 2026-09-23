@@ -37,6 +37,9 @@ const ON_THIS_DAY_COLOR: [number, number, number] = [0x4f, 0xd1, 0xc5];
 const ON_THIS_DAY_HIT_RADIUS = 14;
 const ON_THIS_DAY_LEADER_GAP = 10;
 const ON_THIS_DAY_LABEL_EDGE_MARGIN = 120;
+// On-screen margin (in px) kept around the viewport when culling the dot
+// buffer, so dots don't pop at the edges while panning.
+const ON_THIS_DAY_DOT_MARGIN = 48;
 
 const LABEL_ANGLE_DEG = 45;
 
@@ -126,19 +129,31 @@ export default function Timeline({
     [],
   );
 
-  // On-this-day positions depend only on the scale/orientation, not the zoom,
-  // so keep them out of the zoom-sensitive layer memo to avoid recomputing the
-  // full 20k-point buffer on every zoom frame.
-  const onThisDayPoints = useMemo(
-    () =>
-      onThisDayEvents.map((event) => ({
-        coord: yearToCoord(event.year, scale),
-        event,
-        otd: true,
-      })),
+  // On-this-day dots: cull the full ~20k-point set to the viewport (plus a
+  // margin) before building the buffer, so deep zooms into a few days or months
+  // don't keep re-uploading the entire history every frame.
+  const onThisDayPoints = useMemo(() => {
+    if (!visibleCoordRange) return [];
+    const [lo, hi] = visibleCoordRange;
+    const zoom =
+      orientation === "horizontal" ? viewState.zoomX : viewState.zoomY;
+    const margin = ON_THIS_DAY_DOT_MARGIN / Math.pow(2, zoom);
+    const out: { coord: number; event: TimelineEvent; otd: true }[] = [];
+    for (const event of onThisDayEvents) {
+      const coord = yearToCoord(event.year, scale);
+      if (coord < lo - margin || coord > hi + margin) continue;
+      out.push({ coord, event, otd: true });
+    }
+    return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [onThisDayEvents, scale],
-  );
+  }, [
+    onThisDayEvents,
+    visibleCoordRange,
+    scale,
+    viewState.zoomX,
+    viewState.zoomY,
+    orientation,
+  ]);
 
   const onThisDayVisibleEvents = useMemo(() => {
     if (!visibleCoordRange) return [];
@@ -636,6 +651,7 @@ export default function Timeline({
   }, [
     events,
     onThisDayEvents,
+    onThisDayPoints,
     showOnThisDayLabels,
     otdLabelAlpha,
     selectedEvent,
