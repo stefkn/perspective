@@ -19,6 +19,16 @@ export interface TimelineEvent extends EntityDetail {
   dayIndex?: number;
 }
 
+// A collapsed set of intervals rendered as a single "+n more" bar. Carried on
+// pickable layers so a hover can show a tooltip and a tap can zoom in.
+export interface AggregateInfo {
+  startYear: number;
+  endYear: number;
+  count: number;
+  names: string[];
+  unitNoun?: string;
+}
+
 // Raw "On this day" record as bundled in public/on-this-day.json.
 export interface OnThisDayRecord {
   y: number;
