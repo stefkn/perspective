@@ -29,6 +29,11 @@ export interface SpanConfig {
   work?: boolean; // creative works: trim end when it doesn't postdate start
 }
 
+// Creative works are point-like (or short-lived compositions). A "publication
+// date" that lands centuries after inception is a modern edition/translation,
+// not the work's own creation window, so reject it as an end date.
+const MAX_WORK_SPAN_YEARS = 100;
+
 export const TYPE_CONFIG: Record<EntityType, SpanConfig> = {
   person: { spanKind: "life", startPids: ["P569"], endPids: ["P570"] },
   state: { spanKind: "existence", startPids: ["P571", "P580"], endPids: ["P576", "P582"] },
@@ -57,6 +62,7 @@ export function spanFor(
   let end = finest(cfg.endPids.map((p) => dates[p]));
   if (cfg.work) {
     if (start && end && end.year <= start.year) end = undefined;
+    if (start && end && end.year - start.year > MAX_WORK_SPAN_YEARS) end = undefined;
     if (!start && end) {
       start = end;
       end = undefined;

@@ -24145,7 +24145,7 @@ export const CULTURE: Interval[] = [
     "id": "Q73112",
     "title": "Anabasis (Xenophon)",
     "startYear": -370,
-    "endYear": 1859,
+    "endYear": -369.91786447638606,
     "estimated": false,
     "description": "Anabasis recounts the journey of Greek mercenaries returning home after a failed campaign in Persia.",
     "significance": 0.4191926844795348,
