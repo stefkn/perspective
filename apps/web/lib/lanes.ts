@@ -61,6 +61,11 @@ export const MAIN_AXIS_HALF = 48;
 // Gap between adjacent lanes, in world units (pixels on the perp axis).
 export const LANE_GAP = 12;
 
+// Extra perpendicular room reserved beyond the outermost lane's band, so the
+// lane title and the "+n more" summary strip (which sit just outside the band
+// edge) can still be panned fully into view instead of clipping at the edge.
+export const LANE_OUTER_PAD = 28;
+
 // Discrete per-lane size levels. Each maps to a fixed half-width (in world
 // units = pixels on the perp axis) so a user can grant more or less space to
 // the lanes they care about, independent of how many lanes are visible.
@@ -215,7 +220,7 @@ export function layoutLaneBands(
       bands[lane.id] = { center, half };
       cursor += 2 * half + LANE_GAP;
     }
-    halfPerSide[side] = cursor - LANE_GAP;
+    halfPerSide[side] = cursor - LANE_GAP + LANE_OUTER_PAD;
   }
 
   return { bands, negExtent: halfPerSide[-1], posExtent: halfPerSide[1] };
