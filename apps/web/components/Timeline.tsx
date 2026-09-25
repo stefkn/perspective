@@ -8,7 +8,7 @@ import {
   ScatterplotLayer,
   TextLayer,
 } from "@deck.gl/layers";
-import type { TimelineEvent } from "../lib/types";
+import type { TimelineEvent, EntityDetail, AggregateInfo } from "../lib/types";
 import {
   yearToCoord,
   coordToYear,
@@ -20,7 +20,12 @@ import {
 import { opacityForSignificance, significanceColor } from "../lib/significance";
 import { generateTicks, monthYearLabel } from "../lib/ticks";
 import type { LaneBand, LaneDefinition, LaneId } from "../lib/lanes";
-import { buildPeriodBands, buildLaneLayers } from "./lane-layers";
+import {
+  buildPeriodBands,
+  buildLaneLayers,
+  STICKY_RULER_INSET,
+  STICKY_RULER_LABEL_OFFSET,
+} from "./lane-layers";
 import {
   computeOtdLabelLanes,
   otdDotSpreadPx,
@@ -32,11 +37,21 @@ import type { TimeViewState } from "../lib/view-state";
 
 const AXIS_COLOR: [number, number, number] = [0x39, 0x41, 0x4d];
 const TICK_COLOR: [number, number, number] = [0x8a, 0x93, 0xa6];
+// Full-viewport reference guides: a hairline at round years so an entity sitting
+// far from the axis can be traced across to the sticky ruler. Decades first;
+// zooming out coarsens the step to centuries, then millennia, so no more than
+// MAX_GUIDE_LINES are ever on screen. Past that (fully zoomed out) they vanish.
+const MAX_GUIDE_LINES = 8;
+const GUIDE_STEPS = [10, 100, 1000];
+const GUIDE_COLOR: [number, number, number, number] = [0x8a, 0x93, 0xa6, 32];
 const NOW_COLOR: [number, number, number] = [0x7f, 0xd1, 0xff];
 const ON_THIS_DAY_COLOR: [number, number, number] = [0x4f, 0xd1, 0xc5];
 const ON_THIS_DAY_HIT_RADIUS = 14;
 const ON_THIS_DAY_LEADER_GAP = 10;
 const ON_THIS_DAY_LABEL_EDGE_MARGIN = 120;
+// On-screen margin (in px) kept around the viewport when culling the dot
+// buffer, so dots don't pop at the edges while panning.
+const ON_THIS_DAY_DOT_MARGIN = 48;
 
 const LABEL_ANGLE_DEG = 45;
 
@@ -72,7 +87,7 @@ interface TimelineProps {
   showOtdLabels: boolean;
   otdLabelAlpha: number;
   otdLabelSampleCount: number;
-  selectedEvent: TimelineEvent | null;
+  selectedEvent: EntityDetail | null;
   lanes: LaneDefinition[];
   laneBands: Record<LaneId, LaneBand>;
   orientation: Orientation;
@@ -85,8 +100,17 @@ interface TimelineProps {
   visiblePerpRange: [number, number] | null;
   onViewStateChange: (vs: TimeViewState) => void;
   onResize: (size: { width: number; height: number }) => void;
-  onSelect: (event: TimelineEvent | null) => void;
-  onCycleLane: (id: LaneId) => void;
+  onSelect: (detail: EntityDetail | null) => void;
+  onAggregateNavigate: (startYear: number, endYear: number) => void;
+  onHoverAggregate: (
+    info: {
+      x: number;
+      y: number;
+      count: number;
+      names: string[];
+      unitNoun?: string;
+    } | null,
+  ) => void;
 }
 
 export default function Timeline({
@@ -110,7 +134,8 @@ export default function Timeline({
   onViewStateChange,
   onResize,
   onSelect,
-  onCycleLane,
+  onAggregateNavigate,
+  onHoverAggregate,
 }: TimelineProps) {
   const offset = (coord: number, perp: number): [number, number, number] =>
     timeOffset(coord, perp, orientation);
@@ -128,19 +153,31 @@ export default function Timeline({
     [],
   );
 
-  // On-this-day positions depend only on the scale/orientation, not the zoom,
-  // so keep them out of the zoom-sensitive layer memo to avoid recomputing the
-  // full 20k-point buffer on every zoom frame.
-  const onThisDayPoints = useMemo(
-    () =>
-      onThisDayEvents.map((event) => ({
-        coord: yearToCoord(event.year, scale),
-        event,
-        otd: true,
-      })),
+  // On-this-day dots: cull the full ~20k-point set to the viewport (plus a
+  // margin) before building the buffer, so deep zooms into a few days or months
+  // don't keep re-uploading the entire history every frame.
+  const onThisDayPoints = useMemo(() => {
+    if (!visibleCoordRange) return [];
+    const [lo, hi] = visibleCoordRange;
+    const zoom =
+      orientation === "horizontal" ? viewState.zoomX : viewState.zoomY;
+    const margin = ON_THIS_DAY_DOT_MARGIN / Math.pow(2, zoom);
+    const out: { coord: number; event: TimelineEvent; otd: true }[] = [];
+    for (const event of onThisDayEvents) {
+      const coord = yearToCoord(event.year, scale);
+      if (coord < lo - margin || coord > hi + margin) continue;
+      out.push({ coord, event, otd: true });
+    }
+    return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [onThisDayEvents, scale],
-  );
+  }, [
+    onThisDayEvents,
+    visibleCoordRange,
+    scale,
+    viewState.zoomX,
+    viewState.zoomY,
+    orientation,
+  ]);
 
   const onThisDayVisibleEvents = useMemo(() => {
     if (!visibleCoordRange) return [];
@@ -281,6 +318,7 @@ export default function Timeline({
           orientation === "horizontal" ? 20 : PORTRAIT_LABEL_CLEARANCE,
         ),
         text: event.title,
+        event,
       },
     ];
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -288,10 +326,14 @@ export default function Timeline({
 
   const selectionPin = useMemo(() => {
     if (!selectedEvent) return null;
+    const year = selectedEvent.year ?? selectedEvent.startYear;
+    if (year == null) return null;
     const zoom =
       orientation === "horizontal" ? viewState.zoomX : viewState.zoomY;
-    const spread = otdDotSpreadPx(selectedEvent.dayIndex) / Math.pow(2, zoom);
-    const coord = yearToCoord(selectedEvent.year, scale) + spread;
+    const dayIndex = (selectedEvent as TimelineEvent).dayIndex;
+    const spread =
+      dayIndex != null ? otdDotSpreadPx(dayIndex) / Math.pow(2, zoom) : 0;
+    const coord = yearToCoord(year, scale) + spread;
     const fill: [number, number, number, number] =
       selectedEvent.significance != null
         ? significanceColor(selectedEvent.significance, 1)
@@ -358,29 +400,36 @@ export default function Timeline({
       { source: offset(0, -24), target: offset(0, 24) },
     ];
 
-    const tickMarks = ticks.map((t) => ({
-      source: offset(t.coord, t.major ? -8 : -4),
-      target: offset(t.coord, t.major ? 8 : 4),
+    // Sticky time ruler: a compact scale pinned to a fixed viewport edge so the
+    // current time stays readable however far the lanes are panned perpendicular
+    // to the main axis. visiblePerpRange[0] is the low edge of the perpendicular
+    // axis: the top of the screen when horizontal (+Y is down), the left edge
+    // when vertical (+X is right). Pinning there keeps the ruler clear of the
+    // event detail panel and minimap, which are anchored along the bottom.
+    const stickyPerp = visiblePerpRange
+      ? visiblePerpRange[0] + STICKY_RULER_INSET
+      : 0;
+
+    const rulerData = [
+      {
+        source: offset(coordExtent[0], stickyPerp),
+        target: offset(coordExtent[1], stickyPerp),
+      },
+    ];
+
+    const rulerTicks = ticks.map((t) => ({
+      source: offset(t.coord, stickyPerp),
+      target: offset(t.coord, stickyPerp + (t.major ? 5 : 3)),
     }));
 
     const tickLabels = ticks
       .filter((t) => t.label)
-      .map((t) => {
-        if (orientation === "horizontal") {
-          return {
-            position: offset(t.coord, 16),
-            text: t.label,
-            anchor: "middle" as const,
-            baseline: "top" as const,
-          };
-        }
-        return {
-          position: offset(t.coord, -16),
-          text: t.label,
-          anchor: "end" as const,
-          baseline: "center" as const,
-        };
-      });
+      .map((t) => ({
+        position: offset(t.coord, stickyPerp + STICKY_RULER_LABEL_OFFSET),
+        text: t.label,
+        anchor: orientation === "horizontal" ? ("middle" as const) : ("start" as const),
+        baseline: orientation === "horizontal" ? ("top" as const) : ("center" as const),
+      }));
 
     const nowLabel =
       orientation === "horizontal"
@@ -393,10 +442,7 @@ export default function Timeline({
     const pinnedTickLabel = (() => {
       if (ticks.some((t) => t.label) || !visibleCoordRange) return [];
       const loCoord = Math.max(visibleCoordRange[0], coordExtent[0]);
-      const position =
-        orientation === "horizontal"
-          ? offset(loCoord, 16)
-          : offset(loCoord, -16);
+      const position = offset(loCoord, stickyPerp + STICKY_RULER_LABEL_OFFSET);
       return [{ position, text: monthYearLabel(coordToYear(loCoord, scale)) }];
     })();
 
@@ -411,6 +457,61 @@ export default function Timeline({
       buildLaneLayers(lane, laneBands[lane.id], laneOptions),
     );
 
+    // Reference guides run the full perpendicular extent of the viewport. They
+    // sit above the lanes so a bar deep in the stack stays traceable to the
+    // ruler, but below the ruler itself so its labels keep the last word.
+    const referenceGuides: {
+      source: [number, number, number];
+      target: [number, number, number];
+    }[] = (() => {
+      if (!visibleCoordRange || !visiblePerpRange) return [];
+      const lo = Math.max(visibleCoordRange[0], coordExtent[0]);
+      const hi = Math.min(visibleCoordRange[1], coordExtent[1]);
+      if (hi <= lo) return [];
+      const yLo = coordToYear(lo, scale);
+      const yHi = coordToYear(hi, scale);
+      const linesAt = (step: number) => {
+        const first = Math.ceil(yLo / step) * step;
+        const last = Math.floor(yHi / step) * step;
+        return {
+          first,
+          last,
+          count: last < first ? 0 : Math.floor((last - first) / step) + 1,
+        };
+      };
+      // A window narrower than a decade boundary has nothing to draw.
+      if (linesAt(10).count <= 0) return [];
+      // Finest step that keeps the viewport within the cap: decades, then
+      // centuries, then millennia.
+      let step = GUIDE_STEPS.find((candidate) => {
+        const { count } = linesAt(candidate);
+        return count >= 1 && count <= MAX_GUIDE_LINES;
+      });
+      // Only reachable when every rung is either too crowded or misses the
+      // window entirely (e.g. decades crowd the screen but the window is too
+      // narrow to hold a century). Thin the coarsest rung that does land a
+      // line, so they keep to round years instead of going blank.
+      if (step === undefined) {
+        step =
+          GUIDE_STEPS.filter((candidate) => linesAt(candidate).count >= 1).pop() ??
+          10;
+        const stride = step;
+        while (linesAt(step).count > MAX_GUIDE_LINES) step += stride;
+      }
+      const { first, last, count } = linesAt(step);
+      if (count <= 0 || count > MAX_GUIDE_LINES) return [];
+      const [perpLo, perpHi] = visiblePerpRange;
+      const guides = [];
+      for (let year = first; year <= last; year += step) {
+        const coord = yearToCoord(year, scale);
+        guides.push({
+          source: offset(coord, perpLo),
+          target: offset(coord, perpHi),
+        });
+      }
+      return guides;
+    })();
+
     return [
       new LineLayer({
         id: "axis",
@@ -422,9 +523,31 @@ export default function Timeline({
         getWidth: 1.5,
         pickable: false,
       }),
+      ...buildPeriodBands(laneOptions),
+      ...laneLayers,
       new LineLayer({
-        id: "ticks",
-        data: tickMarks,
+        id: "reference-guides",
+        data: referenceGuides,
+        getSourcePosition: (d) => d.source,
+        getTargetPosition: (d) => d.target,
+        getColor: GUIDE_COLOR,
+        widthUnits: "pixels",
+        getWidth: 1,
+        pickable: false,
+      }),
+      new LineLayer({
+        id: "ruler",
+        data: rulerData,
+        getSourcePosition: (d) => d.source,
+        getTargetPosition: (d) => d.target,
+        getColor: AXIS_COLOR,
+        widthUnits: "pixels",
+        getWidth: 1,
+        pickable: false,
+      }),
+      new LineLayer({
+        id: "ruler-ticks",
+        data: rulerTicks,
         getSourcePosition: (d) => d.source,
         getTargetPosition: (d) => d.target,
         getColor: AXIS_COLOR,
@@ -450,7 +573,7 @@ export default function Timeline({
         data: pinnedTickLabel,
         getPosition: (d) => d.position,
         getText: (d) => d.text,
-        getTextAnchor: orientation === "horizontal" ? "start" : "end",
+        getTextAnchor: "start",
         getAlignmentBaseline: orientation === "horizontal" ? "top" : "bottom",
         getColor: TICK_COLOR,
         sizeUnits: "pixels",
@@ -458,8 +581,6 @@ export default function Timeline({
         fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
         pickable: false,
       }),
-      ...buildPeriodBands(laneOptions),
-      ...laneLayers,
       new LineLayer({
         id: "now",
         data: nowData,
@@ -512,7 +633,7 @@ export default function Timeline({
         getSize: 13,
         fontFamily: "ui-sans-serif, system-ui, -apple-system, sans-serif",
         characterSet: "auto",
-        pickable: false,
+        pickable: true,
         parameters: { depthTest: false },
       }),
       new ScatterplotLayer({
@@ -574,7 +695,7 @@ export default function Timeline({
         getSize: 12,
         fontFamily: "ui-sans-serif, system-ui, -apple-system, sans-serif",
         characterSet: "auto",
-        pickable: false,
+        pickable: true,
         parameters: { depthTest: false },
       }),
       new TextLayer({
@@ -596,7 +717,7 @@ export default function Timeline({
         getSize: 13,
         fontFamily: "ui-sans-serif, system-ui, -apple-system, sans-serif",
         characterSet: "auto",
-        pickable: false,
+        pickable: true,
         parameters: { depthTest: false },
       }),
       new ScatterplotLayer({
@@ -633,6 +754,7 @@ export default function Timeline({
   }, [
     events,
     onThisDayEvents,
+    onThisDayPoints,
     showOnThisDayLabels,
     otdLabelAlpha,
     selectedEvent,
@@ -681,16 +803,35 @@ export default function Timeline({
       }}
       onResize={onResize}
       onHover={(info) => {
-        const obj = info.object as { otd?: boolean; event?: TimelineEvent } | null;
+        const obj = info.object as
+          | { otd?: boolean; event?: TimelineEvent; aggregate?: AggregateInfo }
+          | null;
         setHoveredId(obj?.otd ? obj.event?.id ?? null : null);
+        if (obj?.aggregate) {
+          onHoverAggregate({
+            x: info.x,
+            y: info.y,
+            count: obj.aggregate.count,
+            names: obj.aggregate.names,
+            unitNoun: obj.aggregate.unitNoun,
+          });
+        } else {
+          onHoverAggregate(null);
+        }
       }}
       onClick={(info) => {
-        const laneId = info.object?.laneId as LaneId | undefined;
-        if (laneId) {
-          onCycleLane(laneId);
+        const obj = info.object as
+          | {
+              event?: TimelineEvent;
+              detail?: EntityDetail;
+              aggregate?: AggregateInfo;
+            }
+          | null;
+        if (obj?.aggregate) {
+          onAggregateNavigate(obj.aggregate.startYear, obj.aggregate.endYear);
           return;
         }
-        onSelect(info.object?.event ?? null);
+        onSelect(obj?.detail ?? obj?.event ?? null);
       }}
       getCursor={({ isDragging, isHovering }) =>
         isDragging ? "grabbing" : isHovering ? "pointer" : "grab"

@@ -9,8 +9,8 @@ import {
   useState,
 } from "react";
 import dynamic from "next/dynamic";
-import { EVENTS } from "../lib/events";
-import type { TimelineEvent } from "../lib/types";
+import { EVENTS } from "../lib/entities-data";
+import type { TimelineEvent, EntityDetail } from "../lib/types";
 import {
   yearToCoord,
   coordToYear,
@@ -33,7 +33,9 @@ import { isWebGL2Supported } from "../lib/webgl";
 import {
   LANES,
   LANE_BY_ID,
-  LANE_SIZES,
+  LANE_HALF_MIN,
+  LANE_HALF_MAX,
+  LANE_SIZE_HALF,
   MAIN_AXIS_ID,
   defaultLaneConfigs,
   defaultLaneItems,
@@ -41,7 +43,6 @@ import {
   type LaneConfig,
   type LaneId,
   type LaneItem,
-  type LaneSize,
 } from "../lib/lanes";
 import {
   loadOnThisDayEvents,
@@ -116,14 +117,27 @@ function loadLaneState(): {
       for (const id of Object.keys(configs) as LaneId[]) {
         const c = parsed.configs[id];
         if (!c || typeof c !== "object") continue;
-        const entry = c as Partial<LaneConfig>;
+        const entry = c as Partial<LaneConfig> & {
+          size?: "compact" | "normal" | "large";
+          perpScale?: number;
+        };
         if (typeof entry.visible === "boolean") configs[id].visible = entry.visible;
-        if (
+        if (typeof entry.half === "number") {
+          configs[id].half = Math.min(
+            Math.max(entry.half, LANE_HALF_MIN),
+            LANE_HALF_MAX,
+          );
+        } else if (
           entry.size === "compact" ||
           entry.size === "normal" ||
           entry.size === "large"
         ) {
-          configs[id].size = entry.size;
+          // Migrate the old size + perpScale pair into a single half-width.
+          const scale = typeof entry.perpScale === "number" ? entry.perpScale : 1;
+          configs[id].half = Math.min(
+            Math.max(LANE_SIZE_HALF[entry.size] * scale, LANE_HALF_MIN),
+            LANE_HALF_MAX,
+          );
         }
       }
     }
@@ -209,8 +223,15 @@ export default function TimelineApp() {
   const fittedRef = useRef(false);
   const lastViewStateRef = useRef<{ center: number; zoom: number; perp: number } | null>(null);
 
-  const [selectedEvent, setSelectedEvent] = useState<TimelineEvent | null>(null);
+  const [selectedEvent, setSelectedEvent] = useState<EntityDetail | null>(null);
   const selectedId = selectedEvent?.id ?? null;
+  const [hoverAggregate, setHoverAggregate] = useState<{
+    x: number;
+    y: number;
+    count: number;
+    names: string[];
+    unitNoun?: string;
+  } | null>(null);
   const [onThisDayEvents, setOnThisDayEvents] = useState<TimelineEvent[]>([]);
   const [webglSupported, setWebglSupported] = useState(true);
   const [timelineReady, setTimelineReady] = useState(false);
@@ -239,19 +260,8 @@ export default function TimelineApp() {
     [configs, updateLane],
   );
 
-  const cycleLaneSize = useCallback((id: LaneId) => {
-    setLaneState((s) => {
-      const idx = LANE_SIZES.indexOf(s.configs[id].size);
-      const size = LANE_SIZES[(idx + 1) % LANE_SIZES.length];
-      return {
-        items: s.items,
-        configs: { ...s.configs, [id]: { ...s.configs[id], size } },
-      };
-    });
-  }, []);
-
-  const setLaneSize = useCallback(
-    (id: LaneId, size: LaneSize) => updateLane(id, { size }),
+  const setLaneHalf = useCallback(
+    (id: LaneId, half: number) => updateLane(id, { half }),
     [updateLane],
   );
 
@@ -694,6 +704,50 @@ export default function TimelineApp() {
     [coordExtent],
   );
 
+  // Tapping an aggregated lane band zooms into that band's time range.
+  const handleAggregateNavigate = useCallback(
+    (startYear: number, endYear: number) => {
+      const dim = orientation === "horizontal" ? size.width : size.height;
+      if (dim <= 0) return;
+
+      const extent = coordExtent[1] - coordExtent[0];
+      const fitZoom = Math.log2(dim / (extent * FIT_PAD));
+
+      const c0 = yearToCoord(startYear, scale);
+      const c1 = yearToCoord(endYear, scale);
+      const span = Math.max(c1 - c0, 1);
+      const pad = 1.3;
+      const targetZoom = Math.min(
+        Math.max(Math.log2(dim / (span * pad)), fitZoom),
+        MAX_ZOOM,
+      );
+      const targetRight = c1 + (span * (pad - 1)) / 2;
+
+      const curZoom = Math.min(Math.max(timeZoom, fitZoom), MAX_ZOOM);
+      const curCenter = clampCoord(timeCenter, coordExtent);
+      const curRight = curCenter + dim / (2 * Math.pow(2, curZoom));
+
+      animateView(
+        { zoom: curZoom, right: curRight },
+        { zoom: targetZoom, right: targetRight },
+        dim,
+        600,
+      );
+    },
+    [orientation, size, coordExtent, scale, timeZoom, timeCenter, animateView],
+  );
+
+  const handleHoverAggregate = useCallback(
+    (info: {
+      x: number;
+      y: number;
+      count: number;
+      names: string[];
+      unitNoun?: string;
+    } | null) => setHoverAggregate(info),
+    [],
+  );
+
   const toggleScale = useCallback(() => {
     const next: Scale = scale === "log" ? "linear" : "log";
     const dim = orientation === "horizontal" ? size.width : size.height;
@@ -761,7 +815,7 @@ export default function TimelineApp() {
           configs={configs}
           onToggle={toggleLane}
           onReorder={reorderItem}
-          onSetSize={setLaneSize}
+          onSetHalf={setLaneHalf}
         />
         <button className="app-reset" onClick={resetView}>
           Reset view
@@ -800,7 +854,8 @@ export default function TimelineApp() {
               onViewStateChange={handleViewStateChange}
               onResize={handleResize}
               onSelect={setSelectedEvent}
-              onCycleLane={cycleLaneSize}
+              onAggregateNavigate={handleAggregateNavigate}
+              onHoverAggregate={handleHoverAggregate}
             />
 
             <div className="minimap-wrap">
@@ -820,6 +875,23 @@ export default function TimelineApp() {
             selectedId={selectedId}
             onSelect={setSelectedEvent}
           />
+        )}
+
+        {hoverAggregate && (
+          <div
+            className="aggregate-tooltip"
+            style={{ left: hoverAggregate.x + 14, top: hoverAggregate.y + 16 }}
+          >
+            <div className="aggregate-tooltip-count">
+              ~{hoverAggregate.count.toLocaleString("en-US")}+ more
+              {hoverAggregate.unitNoun ? ` ${hoverAggregate.unitNoun}` : ""}
+            </div>
+            {hoverAggregate.names.length > 0 && (
+              <div className="aggregate-tooltip-names">
+                {hoverAggregate.names.join(" · ")}
+              </div>
+            )}
+          </div>
         )}
 
         {selectedEvent && (

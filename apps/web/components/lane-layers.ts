@@ -3,6 +3,7 @@ import { LineLayer, PathLayer, PolygonLayer, TextLayer } from "@deck.gl/layers";
 import { PathStyleExtension } from "@deck.gl/extensions";
 import {
   yearToCoord,
+  coordToYear,
   timeOffset,
   type Orientation,
   type Scale,
@@ -44,10 +45,8 @@ import {
   formatEnergy,
   type EnergyPoint,
 } from "../lib/energy";
-import { PERIODS } from "../lib/periods";
-import { POWERS } from "../lib/powers";
-import { PEOPLE } from "../lib/people";
-import { CULTURE } from "../lib/culture";
+import { PERIODS, POWERS, PEOPLE, WARS, CULTURE } from "../lib/entities-data";
+import type { AggregateInfo, EntityDetail } from "../lib/types";
 
 const MONO = "ui-monospace, SFMono-Regular, Menlo, monospace";
 const SANS = "ui-sans-serif, system-ui, -apple-system, sans-serif";
@@ -74,13 +73,39 @@ const CULTURE_LABEL: [number, number, number, number] = [246, 210, 150, 220];
 const CULTURE_EST_FILL: [number, number, number, number] = [240, 180, 90, 12];
 const CULTURE_EST_STROKE: [number, number, number, number] = [244, 196, 122, 180];
 
+const WARS_FILL: [number, number, number, number] = [226, 110, 110, 34];
+const WARS_STROKE: [number, number, number, number] = [238, 138, 138, 110];
+const WARS_LABEL: [number, number, number, number] = [240, 158, 158, 220];
+const WARS_EST_FILL: [number, number, number, number] = [226, 110, 110, 12];
+const WARS_EST_STROKE: [number, number, number, number] = [238, 138, 138, 170];
+
 const PERIOD_THICKNESS = 8;
 const POWERS_THICKNESS = 8;
 const PEOPLE_THICKNESS = 6;
 const CULTURE_THICKNESS = 6;
+const WARS_THICKNESS = 6;
 
 const DASH_EXTENSION = new PathStyleExtension({ dash: true });
 const INTERVAL_BAND: LaneBand = { center: 0, half: 0 };
+
+// Progressive disclosure: a lane renders individual (named) bands and collapses
+// the remaining visible intervals into a single "~n+ more" block. Order of
+// significance decides which intervals stay individual, and intervals too thin
+// to read always collapse regardless of significance. The number of kept bands
+// is also bounded by how many fit in the lane's perpendicular half (see below),
+// so this is only the absolute ceiling.
+const BUDGET_BANDS = 40;
+// How many collapsed titles the "~n+ more" block carries for its hover tooltip.
+const MORE_NAMES_HINT = 3;
+
+// Lane assignment depends only on each interval's start/end year, so it is
+// computed once at module load instead of re-sorting thousands of intervals on
+// every zoom/pan frame.
+const PEOPLE_ASSIGNED = assignIntervalLanes(PEOPLE);
+const POWERS_ASSIGNED = assignIntervalLanes(POWERS);
+const CULTURE_ASSIGNED = assignIntervalLanes(CULTURE);
+const WARS_ASSIGNED = assignIntervalLanes(WARS);
+const PERIODS_ASSIGNED = assignIntervalLanes(PERIODS);
 
 type Anchor = "start" | "middle" | "end";
 type Baseline = "top" | "center" | "bottom";
@@ -91,6 +116,8 @@ interface LaneLabel {
   anchor: Anchor;
   baseline: Baseline;
   color?: [number, number, number, number];
+  detail?: EntityDetail;
+  aggregate?: AggregateInfo;
 }
 
 // Choose an anchor that keeps a label from spilling off the edge of the screen.
@@ -117,6 +144,19 @@ function titleTimeCoord(
     : coordExtent[0];
 }
 
+// Geometry of the sticky time ruler drawn by Timeline.tsx. It is pinned to the
+// low edge of the visible perpendicular range: the top of the screen when
+// horizontal (+Y is down) and the left edge when vertical (+X is right), which
+// keeps it clear of the event detail panel and minimap anchored at the bottom.
+// Lane titles clamped to that same edge have to clear the ruler's tick labels,
+// so that edge reserves a wider inset than the opposite one.
+export const STICKY_RULER_INSET = 8;
+export const STICKY_RULER_LABEL_OFFSET = 8;
+// Ruler labels start at inset + offset and run ~11px, so titles on the same
+// edge need to start beyond that to keep a readable gap rather than just
+// clearing the glyphs by a pixel.
+export const STICKY_RULER_RESERVE = 40;
+
 // Perpendicular coordinate for a lane title: clamps to the visible viewport so
 // the label for an outermost lane stays on screen instead of slipping past the
 // screen edge when the lane stack overflows.
@@ -125,10 +165,9 @@ function titlePerpCoord(
   visiblePerpRange?: [number, number],
 ): number {
   if (!visiblePerpRange) return perp;
-  const inset = 8;
   return Math.min(
-    Math.max(perp, visiblePerpRange[0] + inset),
-    visiblePerpRange[1] - inset,
+    Math.max(perp, visiblePerpRange[0] + STICKY_RULER_RESERVE),
+    visiblePerpRange[1] - 8,
   );
 }
 
@@ -157,7 +196,7 @@ interface IntervalBandOptions<T extends Interval = Interval> {
   estimateStrokeColor?: [number, number, number, number];
   dashedEstimated?: boolean;
   title?: string;
-  laneId?: string;
+  unitNoun?: string;
   visibleCoordRange?: [number, number];
   visiblePerpRange?: [number, number];
 }
@@ -167,6 +206,8 @@ interface IntervalLabelCandidate {
   text: string;
   coord: number;
   perp: number;
+  interval: Interval;
+  significance: number;
 }
 
 interface ScreenBox {
@@ -375,6 +416,47 @@ function staggerIntervalLabels(
   return result;
 }
 
+// Build an EntityDetail for the info box from an interval.
+function intervalDetail(interval: Interval): EntityDetail {
+  return {
+    id: interval.id,
+    title: interval.title,
+    description: interval.description ?? "",
+    significance: interval.significance,
+    wikipediaUrl: interval.wikipediaUrl ?? null,
+    startYear: interval.startYear,
+    endYear: interval.endYear,
+    estimated: interval.estimated,
+  };
+}
+
+// Axis-aligned rectangle for a band spanning [c0, c1] along time at `perp`.
+function bandPolygon(
+  c0: number,
+  c1: number,
+  perp: number,
+  thickness: number,
+  orientation: Orientation,
+): [number, number][] {
+  const t = thickness / 2;
+  if (orientation === "horizontal") {
+    return [
+      [c0, perp - t],
+      [c1, perp - t],
+      [c1, perp + t],
+      [c0, perp + t],
+    ];
+  }
+  const y0 = -c1;
+  const y1 = -c0;
+  return [
+    [perp - t, y0],
+    [perp + t, y0],
+    [perp + t, y1],
+    [perp - t, y1],
+  ];
+}
+
 // Build stacked interval bands (polygons + labels) for a lane or the main axis.
 export function buildIntervalBands<T extends Interval = Interval>(
   opts: IntervalBandOptions<T>,
@@ -395,7 +477,7 @@ export function buildIntervalBands<T extends Interval = Interval>(
     estimateStrokeColor,
     dashedEstimated,
     title,
-    laneId,
+    unitNoun,
     visibleCoordRange,
     visiblePerpRange,
   } = opts;
@@ -407,32 +489,62 @@ export function buildIntervalBands<T extends Interval = Interval>(
   const estimateFill = estimateFillColor ?? fillColor;
   const estimateStroke = estimateStrokeColor ?? strokeColor;
 
-  const bandData = assigned.map(({ interval, lane }) => {
+  // Single pass over the (pre-assigned) intervals: cull to the viewport and
+  // compute geometry once. Significance ordering happens in the split below.
+  const visible: {
+    interval: T;
+    c0: number;
+    c1: number;
+  }[] = [];
+  for (const { interval } of assigned) {
     const c0 = yearToCoord(interval.startYear, scale);
     const c1 = yearToCoord(interval.endYear, scale);
-    const off = band.center + laneOffset(lane, thickness);
-    const t = thickness / 2;
-    let polygon: [number, number][];
-    if (orientation === "horizontal") {
-      polygon = [
-        [c0, off - t],
-        [c1, off - t],
-        [c1, off + t],
-        [c0, off + t],
-      ];
-    } else {
-      const y0 = -c1;
-      const y1 = -c0;
-      polygon = [
-        [off - t, y0],
-        [off + t, y0],
-        [off + t, y1],
-        [off - t, y1],
-      ];
+    if (visibleCoordRange) {
+      const [vMin, vMax] = visibleCoordRange;
+      if (c1 < vMin || c0 > vMax) continue;
     }
-    return laneId
-      ? { polygon, laneId, estimated: interval.estimated }
-      : { polygon, estimated: interval.estimated };
+    visible.push({ interval, c0, c1 });
+  }
+
+  // Progressive disclosure: keep the most significant intervals that are wide
+  // enough to read as individual bands; collapse the rest into one "~n+ more"
+  // block. The budget is bounded by how many stacked sub-lanes actually fit
+  // inside the lane's perpendicular half, so the kept bands don't spill off
+  // screen. The always-on period band (half = 0) is unbounded and never
+  // collapses (its sub-pixel spans are just dropped rather than summarized).
+  const collapsible = band.half > 0;
+  const budget = collapsible
+    ? Math.min(BUDGET_BANDS, Math.max(2, Math.floor(band.half / 8)))
+    : Infinity;
+
+  const sorted = [...visible].sort(
+    (a, b) => (b.interval.significance ?? 0) - (a.interval.significance ?? 0),
+  );
+  const individual: typeof visible = [];
+  const collapsed: typeof visible = [];
+  for (const v of sorted) {
+    const readable = (v.c1 - v.c0) * timeScale >= MIN_BAND_LABEL_PX;
+    if (readable && individual.length < budget) individual.push(v);
+    else if (collapsible) collapsed.push(v);
+  }
+
+  // Re-pack the kept intervals into a compact swimlane (time-ordered) so they
+  // stack tightly instead of keeping their scattered sub-lane indices from the
+  // full, pre-assigned set.
+  const laneById = new Map<string, number>();
+  for (const { interval, lane } of assignIntervalLanes(
+    individual.map((v) => v.interval),
+  )) {
+    laneById.set(interval.id, lane);
+  }
+
+  // Individual bands (full color, stacked into sub-lanes).
+  const bandData = individual.map(({ interval, c0, c1 }) => {
+    const off = band.center + laneOffset(laneById.get(interval.id) ?? 0, thickness);
+    return {
+      polygon: bandPolygon(c0, c1, off, thickness, orientation),
+      estimated: interval.estimated,
+    };
   });
 
   const viewport =
@@ -441,33 +553,30 @@ export function buildIntervalBands<T extends Interval = Interval>(
       : null;
 
   const labelCandidates: IntervalLabelCandidate[] = [];
-  for (const { interval, lane } of assigned) {
-    const c0 = yearToCoord(interval.startYear, scale);
-    const c1 = yearToCoord(interval.endYear, scale);
+  for (const { interval, c0, c1 } of individual) {
     const displayTitle = interval.estimated
       ? `≈ ${interval.title}`
       : interval.title;
 
-    // Skip spans that don't intersect the viewport at all.
+    // Clamp the label's time position inside the viewport so a band whose
+    // midpoint is off-screen still anchors its label to the visible edge.
     let coord = (c0 + c1) / 2;
     if (visibleCoordRange) {
       const [vMin, vMax] = visibleCoordRange;
-      if (c1 < vMin || c0 > vMax) continue;
       const halfExt = labelTimeHalfExtent(displayTitle, orientation, timeScale);
       const lo = vMin + halfExt;
       const hi = vMax - halfExt;
       coord = lo >= hi ? (vMin + vMax) / 2 : Math.min(Math.max(coord, lo), hi);
     }
 
-    const off = band.center + laneOffset(lane, thickness);
-    const bandPixels = (c1 - c0) * timeScale;
-    if (bandPixels < MIN_BAND_LABEL_PX) continue;
-
+    const off = band.center + laneOffset(laneById.get(interval.id) ?? 0, thickness);
     labelCandidates.push({
       id: `${id}:${interval.id}`,
       text: displayTitle,
       coord,
       perp: orientation === "horizontal" ? off : off + thickness / 2 + 5,
+      interval,
+      significance: interval.significance ?? 0,
     });
   }
 
@@ -485,6 +594,8 @@ export function buildIntervalBands<T extends Interval = Interval>(
     text: label.text,
     anchor,
     baseline: "center",
+    color: labelColor,
+    detail: intervalDetail(label.interval),
   }));
 
   const leaderLines = labelCandidates.flatMap((label, i) => {
@@ -499,6 +610,83 @@ export function buildIntervalBands<T extends Interval = Interval>(
       },
     ];
   });
+
+  // A single "~n+ more" summary block for the collapsed intervals. Bucketing
+  // the hidden set into per-screen-slice chips produced a strip of "+n" blocks
+  // whose counts flickered on every scroll, so instead one contiguous block
+  // spans the visible stretch where entities are being hidden. It is pickable
+  // (tap to zoom to that stretch, hover for a tooltip).
+  const moreBandData: {
+    polygon: [number, number][];
+    aggregate: AggregateInfo;
+  }[] = [];
+  const moreLabelData: LaneLabel[] = [];
+  if (collapsed.length > 0) {
+    // Clamp to the viewport, not the collapsed intervals' full span: at deep
+    // zoom a visible lifespan still spans decades of coordinates, and the
+    // summary belongs to what is on screen.
+    let lo: number;
+    let hi: number;
+    if (visibleCoordRange) {
+      lo = visibleCoordRange[0];
+      hi = visibleCoordRange[1];
+    } else {
+      lo = Infinity;
+      hi = -Infinity;
+      for (const v of collapsed) {
+        if (v.c0 < lo) lo = v.c0;
+        if (v.c1 > hi) hi = v.c1;
+      }
+    }
+
+    let stripLo = Infinity;
+    let stripHi = -Infinity;
+    for (const v of collapsed) {
+      stripLo = Math.min(stripLo, Math.max(v.c0, lo));
+      stripHi = Math.max(stripHi, Math.min(v.c1, hi));
+    }
+    if (stripHi > stripLo) {
+      // Sit the summary strip at the lane's outer edge (furthest from the main
+      // axis), leaving the named-band swimlane clear toward the axis.
+      const off = fractionToPerp(1, band);
+
+      // Most significant hidden titles first, for the hover tooltip.
+      const best = new Map<string, number>();
+      for (const v of collapsed) {
+        const sig = v.interval.significance ?? 0;
+        const prev = best.get(v.interval.title);
+        if (prev == null || sig > prev) best.set(v.interval.title, sig);
+      }
+      const names = [...best.entries()]
+        .sort((x, y) => y[1] - x[1])
+        .slice(0, MORE_NAMES_HINT)
+        .map(([title]) => title);
+
+      const aggregate: AggregateInfo = {
+        startYear: coordToYear(stripLo, scale),
+        endYear: coordToYear(stripHi, scale),
+        count: collapsed.length,
+        names,
+        unitNoun,
+      };
+
+      moreBandData.push({
+        polygon: bandPolygon(stripLo, stripHi, off, thickness, orientation),
+        aggregate,
+      });
+      moreLabelData.push({
+        position: offset(
+          (stripLo + stripHi) / 2,
+          orientation === "horizontal" ? off : off + thickness / 2 + 5,
+        ),
+        text: `~${collapsed.length.toLocaleString("en-US")}+ more`,
+        anchor,
+        baseline: "center",
+        color: labelColor,
+        aggregate,
+      });
+    }
+  }
 
   const leaderColor: [number, number, number, number] = [
     labelColor[0],
@@ -518,7 +706,7 @@ export function buildIntervalBands<T extends Interval = Interval>(
       getLineColor: (d) => (d.estimated ? estimateStroke : strokeColor),
       getLineWidth: 1,
       lineWidthMinPixels: 1,
-      pickable: !!laneId,
+      pickable: false,
       extensions: dashedEstimated ? [DASH_EXTENSION] : [],
       getDashArray: dashedEstimated
         ? (d: { estimated?: boolean }) =>
@@ -546,23 +734,54 @@ export function buildIntervalBands<T extends Interval = Interval>(
       getText: (d) => d.text,
       getTextAnchor: (d) => d.anchor,
       getAlignmentBaseline: (d) => d.baseline,
-      getColor: labelColor,
+      getColor: (d) => d.color ?? labelColor,
       sizeUnits: "pixels",
       getSize: 11,
       fontFamily: SANS,
       characterSet: "auto",
-      pickable: false,
+      pickable: true,
+      parameters: { depthTest: false },
+    }),
+    new PolygonLayer({
+      id: `${id}-more-bands`,
+      data: moreBandData,
+      getPolygon: (d) => d.polygon,
+      filled: true,
+      getFillColor: [fillColor[0], fillColor[1], fillColor[2], 30],
+      stroked: true,
+      getLineColor: [strokeColor[0], strokeColor[1], strokeColor[2], 140],
+      getLineWidth: 1,
+      lineWidthMinPixels: 1,
+      pickable: true,
+      extensions: [DASH_EXTENSION],
+      getDashArray: [4, 4] as [number, number],
+      parameters: { depthTest: false },
+    }),
+    new TextLayer({
+      id: `${id}-more-labels`,
+      data: moreLabelData,
+      getPosition: (d) => d.position,
+      getText: (d) => d.text,
+      getTextAnchor: (d) => d.anchor,
+      getAlignmentBaseline: (d) => d.baseline,
+      getColor: (d) => d.color ?? labelColor,
+      sizeUnits: "pixels",
+      getSize: 10,
+      fontFamily: MONO,
+      characterSet: "auto",
+      pickable: true,
       parameters: { depthTest: false },
     }),
   ];
 
   if (title) {
     const side = band.center >= 0 ? 1 : -1;
-    const anchor = laneLabelAnchor(orientation, side, false);
+    const titleAnchor = laneLabelAnchor(orientation, side, false);
+    const titleText = `${title} · ${assigned.length.toLocaleString("en-US")}`;
     layers.push(
       new TextLayer({
         id: `${id}-title`,
-        data: [{ title }],
+        data: [{ title: titleText }],
         getPosition: () =>
           timeOffset(
             titleTimeCoord(coordExtent, visibleCoordRange),
@@ -570,8 +789,8 @@ export function buildIntervalBands<T extends Interval = Interval>(
             orientation,
           ),
         getText: (d) => d.title,
-        getTextAnchor: anchor.anchor,
-        getAlignmentBaseline: anchor.baseline,
+        getTextAnchor: titleAnchor.anchor,
+        getAlignmentBaseline: titleAnchor.baseline,
         getColor: LANE_TITLE_COLOR,
         sizeUnits: "pixels",
         getSize: 11,
@@ -731,28 +950,28 @@ function buildSeriesLane(
   return [
     new PolygonLayer({
       id: `${id}-area`,
-      data: [{ polygon: areaPolygon, laneId: id }],
+      data: [{ polygon: areaPolygon }],
       getPolygon: (d) => d.polygon,
       filled: true,
       getFillColor: areaColor,
-      pickable: true,
+      pickable: false,
       parameters: { depthTest: false },
     }),
     new PathLayer({
       id: `${id}-line`,
-      data: [{ path, laneId: id }],
+      data: [{ path }],
       getPath: (d) => d.path,
       getColor: lineColor,
       widthUnits: "pixels",
       getWidth: 2,
-      pickable: true,
+      pickable: false,
       parameters: { depthTest: false },
     }),
     ...(estimatedPath.length
       ? [
           new PathLayer({
             id: `${id}-estimated`,
-            data: [{ path: estimatedPath, laneId: id }],
+            data: [{ path: estimatedPath }],
             getPath: (d) => d.path,
             getColor: estimateColor,
             widthUnits: "pixels",
@@ -809,7 +1028,6 @@ function buildEnergyLane(
     polygon: [number, number][];
     fill: [number, number, number, number];
     line: [number, number, number, number];
-    laneId: string;
   }[] = [];
 
   for (let si = 0; si < ENERGY_SOURCES.length; si++) {
@@ -836,7 +1054,6 @@ function buildEnergyLane(
         ],
         fill: [source.color[0], source.color[1], source.color[2], 150],
         line: [source.color[0], source.color[1], source.color[2], 210],
-        laneId: "energy",
       });
     }
   }
@@ -905,14 +1122,14 @@ function buildEnergyLane(
       getLineColor: (d) => d.line,
       getLineWidth: 1,
       lineWidthMinPixels: 1,
-      pickable: true,
+      pickable: false,
       parameters: { depthTest: false },
     }),
     ...(estimatedEnergyPath.length
       ? [
           new PathLayer({
             id: "energy-estimated",
-            data: [{ path: estimatedEnergyPath, laneId: "energy" }],
+            data: [{ path: estimatedEnergyPath }],
             getPath: (d) => d.path,
             getColor: [220, 220, 230, 170],
             widthUnits: "pixels",
@@ -979,7 +1196,7 @@ export function buildLaneLayers(
   if (lane.id === "people") {
     return buildIntervalBands({
       id: "people",
-      assigned: assignIntervalLanes(PEOPLE),
+      assigned: PEOPLE_ASSIGNED,
       orientation: opts.orientation,
       scale: opts.scale,
       coordExtent: opts.coordExtent,
@@ -993,7 +1210,7 @@ export function buildLaneLayers(
       estimateStrokeColor: PEOPLE_EST_STROKE,
       dashedEstimated: true,
       title: "Notable lifespans",
-      laneId: "people",
+      unitNoun: "notable people",
       visibleCoordRange: opts.visibleCoordRange,
       visiblePerpRange: opts.visiblePerpRange,
     });
@@ -1001,7 +1218,7 @@ export function buildLaneLayers(
   if (lane.id === "culture") {
     return buildIntervalBands({
       id: "culture",
-      assigned: assignIntervalLanes(CULTURE),
+      assigned: CULTURE_ASSIGNED,
       orientation: opts.orientation,
       scale: opts.scale,
       coordExtent: opts.coordExtent,
@@ -1015,14 +1232,36 @@ export function buildLaneLayers(
       estimateStrokeColor: CULTURE_EST_STROKE,
       dashedEstimated: true,
       title: "Cultural works",
-      laneId: "culture",
+      unitNoun: "cultural works",
+      visibleCoordRange: opts.visibleCoordRange,
+      visiblePerpRange: opts.visiblePerpRange,
+    });
+  }
+  if (lane.id === "wars") {
+    return buildIntervalBands({
+      id: "wars",
+      assigned: WARS_ASSIGNED,
+      orientation: opts.orientation,
+      scale: opts.scale,
+      coordExtent: opts.coordExtent,
+      band,
+      thickness: WARS_THICKNESS,
+      timeZoom: opts.timeZoom,
+      fillColor: WARS_FILL,
+      strokeColor: WARS_STROKE,
+      labelColor: WARS_LABEL,
+      estimateFillColor: WARS_EST_FILL,
+      estimateStrokeColor: WARS_EST_STROKE,
+      dashedEstimated: true,
+      title: "Wars",
+      unitNoun: "wars",
       visibleCoordRange: opts.visibleCoordRange,
       visiblePerpRange: opts.visiblePerpRange,
     });
   }
   return buildIntervalBands({
     id: "powers",
-    assigned: assignIntervalLanes(POWERS),
+    assigned: POWERS_ASSIGNED,
     orientation: opts.orientation,
     scale: opts.scale,
     coordExtent: opts.coordExtent,
@@ -1033,7 +1272,7 @@ export function buildLaneLayers(
     strokeColor: POWERS_STROKE,
     labelColor: POWERS_LABEL,
     title: "Major world powers",
-    laneId: "powers",
+    unitNoun: "world powers",
     visibleCoordRange: opts.visibleCoordRange,
     visiblePerpRange: opts.visiblePerpRange,
   });
@@ -1044,7 +1283,7 @@ export function buildPeriodBands(opts: LaneOptions): Layer[] {
   const { orientation, scale, coordExtent, timeZoom, visibleCoordRange, visiblePerpRange } = opts;
   return buildIntervalBands({
     id: "periods",
-    assigned: assignIntervalLanes(PERIODS),
+    assigned: PERIODS_ASSIGNED,
     orientation,
     scale,
     coordExtent,

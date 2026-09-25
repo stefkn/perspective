@@ -2,7 +2,10 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  LANE_HALF_MIN,
+  LANE_HALF_MAX,
   LANE_SIZES,
+  LANE_SIZE_HALF,
   MAIN_AXIS_ID,
   type LaneConfig,
   type LaneDefinition,
@@ -17,7 +20,7 @@ interface LaneTogglesProps {
   configs: Record<LaneId, LaneConfig>;
   onToggle: (id: LaneId) => void;
   onReorder: (item: LaneItem, toIndex: number) => void;
-  onSetSize: (id: LaneId, size: LaneSize) => void;
+  onSetHalf: (id: LaneId, half: number) => void;
 }
 
 function rgb(color: [number, number, number]): string {
@@ -46,7 +49,7 @@ export default function LaneToggles({
   configs,
   onToggle,
   onReorder,
-  onSetSize,
+  onSetHalf,
 }: LaneTogglesProps) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -70,12 +73,6 @@ export default function LaneToggles({
   const visibleCount = items.filter(
     (item) => item !== MAIN_AXIS_ID && configs[item].visible,
   ).length;
-
-  const stepSize = (id: LaneId, dir: -1 | 1) => {
-    const idx = LANE_SIZES.indexOf(configs[id].size);
-    const next = Math.min(Math.max(idx + dir, 0), LANE_SIZES.length - 1);
-    if (next !== idx) onSetSize(id, LANE_SIZES[next]);
-  };
 
   const handleDragStart = useCallback(
     (e: React.PointerEvent, item: LaneItem, index: number) => {
@@ -187,7 +184,6 @@ export default function LaneToggles({
             const lane = byId.get(item);
             if (!lane) return null;
             const cfg = configs[item];
-            const sizeLabel = SIZE_LABEL[cfg.size];
             return (
               <div
                 key={item}
@@ -222,23 +218,30 @@ export default function LaneToggles({
                   role="group"
                   aria-label={`${lane.title} size`}
                 >
-                  <button
-                    aria-label={`${lane.title}: smaller`}
-                    disabled={cfg.size === LANE_SIZES[0]}
-                    onClick={() => stepSize(item, -1)}
-                  >
-                    −
-                  </button>
-                  <span className="lane-row-size-level" title={cfg.size}>
-                    {sizeLabel}
-                  </span>
-                  <button
-                    aria-label={`${lane.title}: larger`}
-                    disabled={cfg.size === LANE_SIZES[LANE_SIZES.length - 1]}
-                    onClick={() => stepSize(item, 1)}
-                  >
-                    +
-                  </button>
+                  <input
+                    type="range"
+                    className="lane-row-size-slider"
+                    min={LANE_HALF_MIN}
+                    max={LANE_HALF_MAX}
+                    step={4}
+                    value={cfg.half}
+                    aria-label={`${lane.title} size`}
+                    onChange={(e) => onSetHalf(item, Number(e.target.value))}
+                  />
+                  {LANE_SIZES.map((size) => (
+                    <button
+                      key={size}
+                      type="button"
+                      className={`lane-row-size-preset${
+                        cfg.half === LANE_SIZE_HALF[size] ? " active" : ""
+                      }`}
+                      aria-label={`${lane.title}: ${size}`}
+                      title={size}
+                      onClick={() => onSetHalf(item, LANE_SIZE_HALF[size])}
+                    >
+                      {SIZE_LABEL[size]}
+                    </button>
+                  ))}
                 </div>
                 <input
                   type="checkbox"

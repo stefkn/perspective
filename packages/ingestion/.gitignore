@@ -1,0 +1,3 @@
+# Intermediate extraction checkpoints (raw SPARQL output) are regenerated;
+# only the final static files under apps/web/public/data are committed.
+data/

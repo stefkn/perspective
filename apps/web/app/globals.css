@@ -268,40 +268,36 @@ button {
 .lane-row-size {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  overflow: hidden;
+  gap: 4px;
+  flex-shrink: 0;
 }
 
-.lane-row-size button {
+.lane-row-size-slider {
+  width: 64px;
+  accent-color: var(--accent);
+  margin: 0;
+}
+
+.lane-row-size-preset {
   background: transparent;
-  border: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
   width: 20px;
   height: 20px;
   padding: 0;
-  font-size: 13px;
+  font-size: 10px;
   line-height: 1;
   color: var(--muted);
 }
 
-.lane-row-size button:hover:not(:disabled) {
+.lane-row-size-preset:hover {
   color: var(--text);
-  background: rgba(255, 255, 255, 0.06);
+  border-color: var(--accent);
 }
 
-.lane-row-size button:disabled {
-  opacity: 0.3;
-  cursor: default;
-}
-
-.lane-row-size-level {
-  min-width: 12px;
-  text-align: center;
-  font-size: 11px;
-  color: var(--text);
-  text-transform: uppercase;
-  font-variant-numeric: tabular-nums;
+.lane-row-size-preset.active {
+  color: var(--accent);
+  border-color: var(--accent);
 }
 
 .lane-row-visible {
@@ -386,6 +382,32 @@ button {
   backdrop-filter: blur(8px);
 }
 
+.aggregate-tooltip {
+  position: absolute;
+  z-index: 11;
+  max-width: 280px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(8px);
+  pointer-events: none;
+}
+
+.aggregate-tooltip-count {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 3px;
+}
+
+.aggregate-tooltip-names {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
 .event-detail-close {
   position: absolute;
   top: 10px;
@@ -421,40 +443,6 @@ button {
   font-size: 13px;
   line-height: 1.5;
   color: var(--muted);
-}
-
-.event-detail-sig {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 12px;
-}
-
-.event-detail-sig-label {
-  font-size: 11px;
-  color: var(--muted);
-  white-space: nowrap;
-}
-
-.event-detail-sig-track {
-  flex: 1;
-  height: 6px;
-  border-radius: 3px;
-  background: rgba(255, 255, 255, 0.08);
-  overflow: hidden;
-}
-
-.event-detail-sig-fill {
-  height: 100%;
-  background: var(--accent);
-  border-radius: 3px;
-}
-
-.event-detail-sig-value {
-  font-size: 11px;
-  color: var(--text);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
 }
 
 .event-detail-link {
@@ -538,5 +526,16 @@ button {
     left: 12px;
     right: 12px;
     max-width: none;
+  }
+
+  .lane-toggles-panel {
+    position: fixed;
+    top: 56px;
+    left: 8px;
+    right: 8px;
+    min-width: 0;
+    max-width: none;
+    max-height: calc(100dvh - 64px);
+    overflow-y: auto;
   }
 }

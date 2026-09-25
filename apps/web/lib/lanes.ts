@@ -6,6 +6,11 @@ export interface Interval {
   startYear: number;
   endYear: number;
   estimated?: boolean;
+  // Detail fields carried through so the info box can be opened from a tap on
+  // the entity's label/band.
+  description?: string;
+  significance?: number;
+  wikipediaUrl?: string | null;
 }
 
 export interface AssignedInterval<T extends Interval = Interval> {
@@ -55,6 +60,11 @@ export const MAIN_AXIS_HALF = 48;
 
 // Gap between adjacent lanes, in world units (pixels on the perp axis).
 export const LANE_GAP = 12;
+
+// Extra perpendicular room reserved beyond the outermost lane's band, so the
+// lane title and the "~n+ more" summary strip (which sit just outside the band
+// edge) can still be panned fully into view instead of clipping at the edge.
+export const LANE_OUTER_PAD = 28;
 
 // Discrete per-lane size levels. Each maps to a fixed half-width (in world
 // units = pixels on the perp axis) so a user can grant more or less space to
@@ -108,6 +118,7 @@ export type LaneId =
   | "co2"
   | "powers"
   | "people"
+  | "wars"
   | "culture"
   | "life-expectancy"
   | "gdp";
@@ -131,11 +142,18 @@ export const MAIN_AXIS_ID = "main" as const;
 export type LaneItem = LaneId | typeof MAIN_AXIS_ID;
 
 // Per-user, per-lane settings: visibility and how much perpendicular space it
-// gets. Side is derived from the lane's position relative to MAIN_AXIS_ID.
+// gets (half-width in px). Side is derived from the lane's position relative
+// to MAIN_AXIS_ID.
 export interface LaneConfig {
   visible: boolean;
-  size: LaneSize;
+  half: number;
 }
+
+// Continuous perpendicular-size range, in px of half-width. The lower bound is
+// just enough to stay legible; the upper bound matches the individual-band
+// budget cap (BUDGET_BANDS rows × ~8px).
+export const LANE_HALF_MIN = 40;
+export const LANE_HALF_MAX = 320;
 
 // Registry of toggleable lanes. `defaultSide` seeds where the lane starts
 // relative to the main axis; the user can reorder lanes (and the divider), so
@@ -146,6 +164,7 @@ export const LANES: LaneDefinition[] = [
   { id: "co2", title: "CO2 emissions", kind: "series", defaultSide: -1, color: [226, 96, 72], defaultVisible: false },
   { id: "powers", title: "Major world powers", kind: "intervals", defaultSide: 1, color: [86, 200, 178], defaultVisible: false },
   { id: "people", title: "Notable lifespans", kind: "intervals", defaultSide: -1, color: [214, 150, 236], defaultVisible: true },
+  { id: "wars", title: "Wars", kind: "intervals", defaultSide: 1, color: [226, 110, 110], defaultVisible: false },
   { id: "culture", title: "Cultural works", kind: "intervals", defaultSide: 1, color: [240, 180, 90], defaultVisible: false },
   { id: "life-expectancy", title: "Life expectancy", kind: "series", defaultSide: 1, color: [126, 199, 106], defaultVisible: false },
   { id: "gdp", title: "Global GDP", kind: "series", defaultSide: 1, color: [109, 165, 240], defaultVisible: false },
@@ -158,7 +177,7 @@ export const LANE_BY_ID: Record<LaneId, LaneDefinition> = Object.fromEntries(
 export function defaultLaneConfig(lane: LaneDefinition): LaneConfig {
   return {
     visible: lane.defaultVisible,
-    size: "normal",
+    half: LANE_SIZE_HALF["normal"],
   };
 }
 
@@ -186,8 +205,8 @@ export interface LaneLayout {
 
 // Lay out visible lanes into perpendicular bands. Ordering (the order of
 // `lanes`) determines stacking within a side, `sides` places each lane relative
-// to the axis, and `configs` supplies the per-lane size. Overflow is reached
-// by panning.
+// to the axis, and `configs` supplies the per-lane half-width. Overflow is
+// reached by panning.
 export function layoutLaneBands(
   lanes: LaneDefinition[],
   perpSize: number,
@@ -201,14 +220,20 @@ export function layoutLaneBands(
     const sideLanes = lanes.filter((l) => sides[l.id] === side);
     if (sideLanes.length === 0) continue;
 
+    // The manager lists lanes top-to-bottom. Above the axis (negative side) the
+    // first item sits furthest from the axis, so iterate in reverse there to
+    // keep list order and on-screen order in sync. Below the axis (positive
+    // side) the first item sits closest to the axis, so keep list order.
+    const ordered = side === -1 ? [...sideLanes].reverse() : sideLanes;
+
     let cursor = MAIN_AXIS_HALF + LANE_GAP;
-    for (const lane of sideLanes) {
-      const half = LANE_SIZE_HALF[configs[lane.id].size];
+    for (const lane of ordered) {
+      const half = configs[lane.id].half;
       const center = side * (cursor + half);
       bands[lane.id] = { center, half };
       cursor += 2 * half + LANE_GAP;
     }
-    halfPerSide[side] = cursor - LANE_GAP;
+    halfPerSide[side] = cursor - LANE_GAP + LANE_OUTER_PAD;
   }
 
   return { bands, negExtent: halfPerSide[-1], posExtent: halfPerSide[1] };
