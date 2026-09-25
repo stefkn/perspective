@@ -37,6 +37,13 @@ import type { TimeViewState } from "../lib/view-state";
 
 const AXIS_COLOR: [number, number, number] = [0x39, 0x41, 0x4d];
 const TICK_COLOR: [number, number, number] = [0x8a, 0x93, 0xa6];
+// Full-viewport reference guides: a hairline at round years so an entity sitting
+// far from the axis can be traced across to the sticky ruler. Decades first;
+// zooming out coarsens the step to centuries, then millennia, so no more than
+// MAX_GUIDE_LINES are ever on screen. Past that (fully zoomed out) they vanish.
+const MAX_GUIDE_LINES = 8;
+const GUIDE_STEPS = [10, 100, 1000];
+const GUIDE_COLOR: [number, number, number, number] = [0x8a, 0x93, 0xa6, 32];
 const NOW_COLOR: [number, number, number] = [0x7f, 0xd1, 0xff];
 const ON_THIS_DAY_COLOR: [number, number, number] = [0x4f, 0xd1, 0xc5];
 const ON_THIS_DAY_HIT_RADIUS = 14;
@@ -450,6 +457,61 @@ export default function Timeline({
       buildLaneLayers(lane, laneBands[lane.id], laneOptions),
     );
 
+    // Reference guides run the full perpendicular extent of the viewport. They
+    // sit above the lanes so a bar deep in the stack stays traceable to the
+    // ruler, but below the ruler itself so its labels keep the last word.
+    const referenceGuides: {
+      source: [number, number, number];
+      target: [number, number, number];
+    }[] = (() => {
+      if (!visibleCoordRange || !visiblePerpRange) return [];
+      const lo = Math.max(visibleCoordRange[0], coordExtent[0]);
+      const hi = Math.min(visibleCoordRange[1], coordExtent[1]);
+      if (hi <= lo) return [];
+      const yLo = coordToYear(lo, scale);
+      const yHi = coordToYear(hi, scale);
+      const linesAt = (step: number) => {
+        const first = Math.ceil(yLo / step) * step;
+        const last = Math.floor(yHi / step) * step;
+        return {
+          first,
+          last,
+          count: last < first ? 0 : Math.floor((last - first) / step) + 1,
+        };
+      };
+      // A window narrower than a decade boundary has nothing to draw.
+      if (linesAt(10).count <= 0) return [];
+      // Finest step that keeps the viewport within the cap: decades, then
+      // centuries, then millennia.
+      let step = GUIDE_STEPS.find((candidate) => {
+        const { count } = linesAt(candidate);
+        return count >= 1 && count <= MAX_GUIDE_LINES;
+      });
+      // Only reachable when every rung is either too crowded or misses the
+      // window entirely (e.g. decades crowd the screen but the window is too
+      // narrow to hold a century). Thin the coarsest rung that does land a
+      // line, so they keep to round years instead of going blank.
+      if (step === undefined) {
+        step =
+          GUIDE_STEPS.filter((candidate) => linesAt(candidate).count >= 1).pop() ??
+          10;
+        const stride = step;
+        while (linesAt(step).count > MAX_GUIDE_LINES) step += stride;
+      }
+      const { first, last, count } = linesAt(step);
+      if (count <= 0 || count > MAX_GUIDE_LINES) return [];
+      const [perpLo, perpHi] = visiblePerpRange;
+      const guides = [];
+      for (let year = first; year <= last; year += step) {
+        const coord = yearToCoord(year, scale);
+        guides.push({
+          source: offset(coord, perpLo),
+          target: offset(coord, perpHi),
+        });
+      }
+      return guides;
+    })();
+
     return [
       new LineLayer({
         id: "axis",
@@ -463,6 +525,16 @@ export default function Timeline({
       }),
       ...buildPeriodBands(laneOptions),
       ...laneLayers,
+      new LineLayer({
+        id: "reference-guides",
+        data: referenceGuides,
+        getSourcePosition: (d) => d.source,
+        getTargetPosition: (d) => d.target,
+        getColor: GUIDE_COLOR,
+        widthUnits: "pixels",
+        getWidth: 1,
+        pickable: false,
+      }),
       new LineLayer({
         id: "ruler",
         data: rulerData,
