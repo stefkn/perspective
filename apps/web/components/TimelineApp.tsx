@@ -33,6 +33,9 @@ import { isWebGL2Supported } from "../lib/webgl";
 import {
   LANES,
   LANE_BY_ID,
+  LANE_HALF_MIN,
+  LANE_HALF_MAX,
+  LANE_SIZE_HALF,
   MAIN_AXIS_ID,
   defaultLaneConfigs,
   defaultLaneItems,
@@ -40,7 +43,6 @@ import {
   type LaneConfig,
   type LaneId,
   type LaneItem,
-  type LaneSize,
 } from "../lib/lanes";
 import {
   loadOnThisDayEvents,
@@ -115,14 +117,27 @@ function loadLaneState(): {
       for (const id of Object.keys(configs) as LaneId[]) {
         const c = parsed.configs[id];
         if (!c || typeof c !== "object") continue;
-        const entry = c as Partial<LaneConfig>;
+        const entry = c as Partial<LaneConfig> & {
+          size?: "compact" | "normal" | "large";
+          perpScale?: number;
+        };
         if (typeof entry.visible === "boolean") configs[id].visible = entry.visible;
-        if (
+        if (typeof entry.half === "number") {
+          configs[id].half = Math.min(
+            Math.max(entry.half, LANE_HALF_MIN),
+            LANE_HALF_MAX,
+          );
+        } else if (
           entry.size === "compact" ||
           entry.size === "normal" ||
           entry.size === "large"
         ) {
-          configs[id].size = entry.size;
+          // Migrate the old size + perpScale pair into a single half-width.
+          const scale = typeof entry.perpScale === "number" ? entry.perpScale : 1;
+          configs[id].half = Math.min(
+            Math.max(LANE_SIZE_HALF[entry.size] * scale, LANE_HALF_MIN),
+            LANE_HALF_MAX,
+          );
         }
       }
     }
@@ -245,8 +260,8 @@ export default function TimelineApp() {
     [configs, updateLane],
   );
 
-  const setLaneSize = useCallback(
-    (id: LaneId, size: LaneSize) => updateLane(id, { size }),
+  const setLaneHalf = useCallback(
+    (id: LaneId, half: number) => updateLane(id, { half }),
     [updateLane],
   );
 
@@ -800,7 +815,7 @@ export default function TimelineApp() {
           configs={configs}
           onToggle={toggleLane}
           onReorder={reorderItem}
-          onSetSize={setLaneSize}
+          onSetHalf={setLaneHalf}
         />
         <button className="app-reset" onClick={resetView}>
           Reset view

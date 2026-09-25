@@ -268,40 +268,36 @@ button {
 .lane-row-size {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  overflow: hidden;
+  gap: 4px;
+  flex-shrink: 0;
 }
 
-.lane-row-size button {
+.lane-row-size-slider {
+  width: 64px;
+  accent-color: var(--accent);
+  margin: 0;
+}
+
+.lane-row-size-preset {
   background: transparent;
-  border: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
   width: 20px;
   height: 20px;
   padding: 0;
-  font-size: 13px;
+  font-size: 10px;
   line-height: 1;
   color: var(--muted);
 }
 
-.lane-row-size button:hover:not(:disabled) {
+.lane-row-size-preset:hover {
   color: var(--text);
-  background: rgba(255, 255, 255, 0.06);
+  border-color: var(--accent);
 }
 
-.lane-row-size button:disabled {
-  opacity: 0.3;
-  cursor: default;
-}
-
-.lane-row-size-level {
-  min-width: 12px;
-  text-align: center;
-  font-size: 11px;
-  color: var(--text);
-  text-transform: uppercase;
-  font-variant-numeric: tabular-nums;
+.lane-row-size-preset.active {
+  color: var(--accent);
+  border-color: var(--accent);
 }
 
 .lane-row-visible {

@@ -142,11 +142,18 @@ export const MAIN_AXIS_ID = "main" as const;
 export type LaneItem = LaneId | typeof MAIN_AXIS_ID;
 
 // Per-user, per-lane settings: visibility and how much perpendicular space it
-// gets. Side is derived from the lane's position relative to MAIN_AXIS_ID.
+// gets (half-width in px). Side is derived from the lane's position relative
+// to MAIN_AXIS_ID.
 export interface LaneConfig {
   visible: boolean;
-  size: LaneSize;
+  half: number;
 }
+
+// Continuous perpendicular-size range, in px of half-width. The lower bound is
+// just enough to stay legible; the upper bound matches the individual-band
+// budget cap (BUDGET_BANDS rows × ~8px).
+export const LANE_HALF_MIN = 40;
+export const LANE_HALF_MAX = 320;
 
 // Registry of toggleable lanes. `defaultSide` seeds where the lane starts
 // relative to the main axis; the user can reorder lanes (and the divider), so
@@ -170,7 +177,7 @@ export const LANE_BY_ID: Record<LaneId, LaneDefinition> = Object.fromEntries(
 export function defaultLaneConfig(lane: LaneDefinition): LaneConfig {
   return {
     visible: lane.defaultVisible,
-    size: "normal",
+    half: LANE_SIZE_HALF["normal"],
   };
 }
 
@@ -198,8 +205,8 @@ export interface LaneLayout {
 
 // Lay out visible lanes into perpendicular bands. Ordering (the order of
 // `lanes`) determines stacking within a side, `sides` places each lane relative
-// to the axis, and `configs` supplies the per-lane size. Overflow is reached
-// by panning.
+// to the axis, and `configs` supplies the per-lane half-width. Overflow is
+// reached by panning.
 export function layoutLaneBands(
   lanes: LaneDefinition[],
   perpSize: number,
@@ -215,7 +222,7 @@ export function layoutLaneBands(
 
     let cursor = MAIN_AXIS_HALF + LANE_GAP;
     for (const lane of sideLanes) {
-      const half = LANE_SIZE_HALF[configs[lane.id].size];
+      const half = configs[lane.id].half;
       const center = side * (cursor + half);
       bands[lane.id] = { center, half };
       cursor += 2 * half + LANE_GAP;
