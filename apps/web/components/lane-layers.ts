@@ -146,6 +146,19 @@ function titleTimeCoord(
     : coordExtent[0];
 }
 
+// Geometry of the sticky time ruler drawn by Timeline.tsx. It is pinned to the
+// low edge of the visible perpendicular range: the top of the screen when
+// horizontal (+Y is down) and the left edge when vertical (+X is right), which
+// keeps it clear of the event detail panel and minimap anchored at the bottom.
+// Lane titles clamped to that same edge have to clear the ruler's tick labels,
+// so that edge reserves a wider inset than the opposite one.
+export const STICKY_RULER_INSET = 8;
+export const STICKY_RULER_LABEL_OFFSET = 8;
+// Ruler labels start at inset + offset and run ~11px, so titles on the same
+// edge need to start beyond that to keep a readable gap rather than just
+// clearing the glyphs by a pixel.
+export const STICKY_RULER_RESERVE = 40;
+
 // Perpendicular coordinate for a lane title: clamps to the visible viewport so
 // the label for an outermost lane stays on screen instead of slipping past the
 // screen edge when the lane stack overflows.
@@ -154,10 +167,9 @@ function titlePerpCoord(
   visiblePerpRange?: [number, number],
 ): number {
   if (!visiblePerpRange) return perp;
-  const inset = 8;
   return Math.min(
-    Math.max(perp, visiblePerpRange[0] + inset),
-    visiblePerpRange[1] - inset,
+    Math.max(perp, visiblePerpRange[0] + STICKY_RULER_RESERVE),
+    visiblePerpRange[1] - 8,
   );
 }
 

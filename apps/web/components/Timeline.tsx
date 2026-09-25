@@ -20,7 +20,12 @@ import {
 import { opacityForSignificance, significanceColor } from "../lib/significance";
 import { generateTicks, monthYearLabel } from "../lib/ticks";
 import type { LaneBand, LaneDefinition, LaneId } from "../lib/lanes";
-import { buildPeriodBands, buildLaneLayers } from "./lane-layers";
+import {
+  buildPeriodBands,
+  buildLaneLayers,
+  STICKY_RULER_INSET,
+  STICKY_RULER_LABEL_OFFSET,
+} from "./lane-layers";
 import {
   computeOtdLabelLanes,
   otdDotSpreadPx,
@@ -388,29 +393,36 @@ export default function Timeline({
       { source: offset(0, -24), target: offset(0, 24) },
     ];
 
-    const tickMarks = ticks.map((t) => ({
-      source: offset(t.coord, t.major ? -8 : -4),
-      target: offset(t.coord, t.major ? 8 : 4),
+    // Sticky time ruler: a compact scale pinned to a fixed viewport edge so the
+    // current time stays readable however far the lanes are panned perpendicular
+    // to the main axis. visiblePerpRange[0] is the low edge of the perpendicular
+    // axis: the top of the screen when horizontal (+Y is down), the left edge
+    // when vertical (+X is right). Pinning there keeps the ruler clear of the
+    // event detail panel and minimap, which are anchored along the bottom.
+    const stickyPerp = visiblePerpRange
+      ? visiblePerpRange[0] + STICKY_RULER_INSET
+      : 0;
+
+    const rulerData = [
+      {
+        source: offset(coordExtent[0], stickyPerp),
+        target: offset(coordExtent[1], stickyPerp),
+      },
+    ];
+
+    const rulerTicks = ticks.map((t) => ({
+      source: offset(t.coord, stickyPerp),
+      target: offset(t.coord, stickyPerp + (t.major ? 5 : 3)),
     }));
 
     const tickLabels = ticks
       .filter((t) => t.label)
-      .map((t) => {
-        if (orientation === "horizontal") {
-          return {
-            position: offset(t.coord, 16),
-            text: t.label,
-            anchor: "middle" as const,
-            baseline: "top" as const,
-          };
-        }
-        return {
-          position: offset(t.coord, -16),
-          text: t.label,
-          anchor: "end" as const,
-          baseline: "center" as const,
-        };
-      });
+      .map((t) => ({
+        position: offset(t.coord, stickyPerp + STICKY_RULER_LABEL_OFFSET),
+        text: t.label,
+        anchor: orientation === "horizontal" ? ("middle" as const) : ("start" as const),
+        baseline: orientation === "horizontal" ? ("top" as const) : ("center" as const),
+      }));
 
     const nowLabel =
       orientation === "horizontal"
@@ -423,10 +435,7 @@ export default function Timeline({
     const pinnedTickLabel = (() => {
       if (ticks.some((t) => t.label) || !visibleCoordRange) return [];
       const loCoord = Math.max(visibleCoordRange[0], coordExtent[0]);
-      const position =
-        orientation === "horizontal"
-          ? offset(loCoord, 16)
-          : offset(loCoord, -16);
+      const position = offset(loCoord, stickyPerp + STICKY_RULER_LABEL_OFFSET);
       return [{ position, text: monthYearLabel(coordToYear(loCoord, scale)) }];
     })();
 
@@ -452,9 +461,21 @@ export default function Timeline({
         getWidth: 1.5,
         pickable: false,
       }),
+      ...buildPeriodBands(laneOptions),
+      ...laneLayers,
       new LineLayer({
-        id: "ticks",
-        data: tickMarks,
+        id: "ruler",
+        data: rulerData,
+        getSourcePosition: (d) => d.source,
+        getTargetPosition: (d) => d.target,
+        getColor: AXIS_COLOR,
+        widthUnits: "pixels",
+        getWidth: 1,
+        pickable: false,
+      }),
+      new LineLayer({
+        id: "ruler-ticks",
+        data: rulerTicks,
         getSourcePosition: (d) => d.source,
         getTargetPosition: (d) => d.target,
         getColor: AXIS_COLOR,
@@ -480,7 +501,7 @@ export default function Timeline({
         data: pinnedTickLabel,
         getPosition: (d) => d.position,
         getText: (d) => d.text,
-        getTextAnchor: orientation === "horizontal" ? "start" : "end",
+        getTextAnchor: "start",
         getAlignmentBaseline: orientation === "horizontal" ? "top" : "bottom",
         getColor: TICK_COLOR,
         sizeUnits: "pixels",
@@ -488,8 +509,6 @@ export default function Timeline({
         fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
         pickable: false,
       }),
-      ...buildPeriodBands(laneOptions),
-      ...laneLayers,
       new LineLayer({
         id: "now",
         data: nowData,
