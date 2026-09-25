@@ -89,15 +89,13 @@ const DASH_EXTENSION = new PathStyleExtension({ dash: true });
 const INTERVAL_BAND: LaneBand = { center: 0, half: 0 };
 
 // Progressive disclosure: a lane renders individual (named) bands and collapses
-// the remaining visible intervals into "+n more" bars. Order of significance
-// decides which intervals stay individual, and intervals too thin to read
-// always collapse regardless of significance. The number of kept bands is also
-// bounded by how many fit in the lane's perpendicular half (see below), so this
-// is only the absolute ceiling.
+// the remaining visible intervals into a single "+n more" block. Order of
+// significance decides which intervals stay individual, and intervals too thin
+// to read always collapse regardless of significance. The number of kept bands
+// is also bounded by how many fit in the lane's perpendicular half (see below),
+// so this is only the absolute ceiling.
 const BUDGET_BANDS = 40;
-// On-screen width of each "+n more" summary bucket, in pixels.
-const AGGREGATE_BUCKET_PX = 48;
-// How many collapsed titles a "+n more" bar carries for its hover tooltip.
+// How many collapsed titles the "+n more" block carries for its hover tooltip.
 const MORE_NAMES_HINT = 3;
 
 // Lane assignment depends only on each interval's start/end year, so it is
@@ -509,11 +507,11 @@ export function buildIntervalBands<T extends Interval = Interval>(
   }
 
   // Progressive disclosure: keep the most significant intervals that are wide
-  // enough to read as individual bands; collapse the rest into "+n more".
-  // The budget is bounded by how many stacked sub-lanes actually fit inside the
-  // lane's perpendicular half, so the kept bands don't spill off screen. The
-  // always-on period band (half = 0) is unbounded and never collapses (its
-  // sub-pixel spans are just dropped rather than summarized as "+n more").
+  // enough to read as individual bands; collapse the rest into one "+n more"
+  // block. The budget is bounded by how many stacked sub-lanes actually fit
+  // inside the lane's perpendicular half, so the kept bands don't spill off
+  // screen. The always-on period band (half = 0) is unbounded and never
+  // collapses (its sub-pixel spans are just dropped rather than summarized).
   const collapsible = band.half > 0;
   const budget = collapsible
     ? Math.min(BUDGET_BANDS, Math.max(2, Math.floor(band.half / 8)))
@@ -613,20 +611,20 @@ export function buildIntervalBands<T extends Interval = Interval>(
     ];
   });
 
-  // "+n more" summary bars for the collapsed intervals, bucketed on screen so
-  // the density stays meaningful under the log/linear transform. Each bar is
-  // pickable (tap to zoom, hover for a tooltip).
+  // A single "+n more" summary block for the collapsed intervals. Bucketing
+  // the hidden set into per-screen-slice chips produced a strip of "+n" blocks
+  // whose counts flickered on every scroll, so instead one contiguous block
+  // spans the visible stretch where entities are being hidden. It is pickable
+  // (tap to zoom to that stretch, hover for a tooltip).
   const moreBandData: {
     polygon: [number, number][];
     aggregate: AggregateInfo;
   }[] = [];
   const moreLabelData: LaneLabel[] = [];
   if (collapsed.length > 0) {
-    // Bucket over the visible viewport, not the collapsed intervals' full span.
-    // At deep zoom a visible lifespan still spans decades of coordinates, and
-    // bucketing that whole span would allocate tens of thousands of off-screen
-    // buckets (the cause of the sub-year zoom freeze). Each collapsed interval
-    // is clamped to the viewport buckets below.
+    // Clamp to the viewport, not the collapsed intervals' full span: at deep
+    // zoom a visible lifespan still spans decades of coordinates, and the
+    // summary belongs to what is on screen.
     let lo: number;
     let hi: number;
     if (visibleCoordRange) {
@@ -640,60 +638,24 @@ export function buildIntervalBands<T extends Interval = Interval>(
         if (v.c1 > hi) hi = v.c1;
       }
     }
-    const span = hi - lo;
-    const pixelSpan = Math.max(span, 1e-6) * timeScale;
-    const bucketCount = Math.min(
-      Math.max(1, Math.ceil(pixelSpan / AGGREGATE_BUCKET_PX)),
-      200,
-    );
-    const bucketW = Math.max(span, 1e-9) / bucketCount;
 
-    const counts = new Array<number>(bucketCount).fill(0);
-    const namesByBucket = Array.from(
-      { length: bucketCount },
-      () => [] as { title: string; sig: number }[],
-    );
+    let stripLo = Infinity;
+    let stripHi = -Infinity;
     for (const v of collapsed) {
-      const b0 = Math.min(
-        bucketCount - 1,
-        Math.max(0, Math.floor((v.c0 - lo) / bucketW)),
-      );
-      const b1 = Math.min(
-        bucketCount - 1,
-        Math.max(0, Math.floor((v.c1 - lo) / bucketW)),
-      );
-      for (let b = b0; b <= b1; b++) {
-        counts[b]++;
-        namesByBucket[b].push({
-          title: v.interval.title,
-          sig: v.interval.significance ?? 0,
-        });
-      }
+      stripLo = Math.min(stripLo, Math.max(v.c0, lo));
+      stripHi = Math.max(stripHi, Math.min(v.c1, hi));
     }
+    if (stripHi > stripLo) {
+      // Sit the summary strip at the lane's outer edge (furthest from the main
+      // axis), leaving the named-band swimlane clear toward the axis.
+      const off = fractionToPerp(1, band);
 
-    // Sit the summary strip at the lane's outer edge (furthest from the main
-    // axis), leaving the named-band swimlane clear toward the axis.
-    const off = fractionToPerp(1, band);
-
-    // Merge adjacent buckets that share a count into a single bar, so a uniform
-    // density (e.g. every visible lifespan overlapping the viewport) reads as
-    // one "+n" bar instead of dozens of identical fragments.
-    for (let b = 0; b < bucketCount; b++) {
-      const count = counts[b];
-      if (count === 0) continue;
-      let end = b;
-      while (end + 1 < bucketCount && counts[end + 1] === count) end++;
-
-      const bucketLo = lo + b * bucketW;
-      const bucketHi = lo + (end + 1) * bucketW;
-
-      // Union the run's title hints (deduped, most significant first).
+      // Most significant hidden titles first, for the hover tooltip.
       const best = new Map<string, number>();
-      for (let i = b; i <= end; i++) {
-        for (const n of namesByBucket[i]) {
-          const prev = best.get(n.title);
-          if (prev == null || n.sig > prev) best.set(n.title, n.sig);
-        }
+      for (const v of collapsed) {
+        const sig = v.interval.significance ?? 0;
+        const prev = best.get(v.interval.title);
+        if (prev == null || sig > prev) best.set(v.interval.title, sig);
       }
       const names = [...best.entries()]
         .sort((x, y) => y[1] - x[1])
@@ -701,30 +663,28 @@ export function buildIntervalBands<T extends Interval = Interval>(
         .map(([title]) => title);
 
       const aggregate: AggregateInfo = {
-        startYear: coordToYear(bucketLo, scale),
-        endYear: coordToYear(bucketHi, scale),
-        count,
+        startYear: coordToYear(stripLo, scale),
+        endYear: coordToYear(stripHi, scale),
+        count: collapsed.length,
         names,
         unitNoun,
       };
 
       moreBandData.push({
-        polygon: bandPolygon(bucketLo, bucketHi, off, thickness, orientation),
+        polygon: bandPolygon(stripLo, stripHi, off, thickness, orientation),
         aggregate,
       });
       moreLabelData.push({
         position: offset(
-          (bucketLo + bucketHi) / 2,
+          (stripLo + stripHi) / 2,
           orientation === "horizontal" ? off : off + thickness / 2 + 5,
         ),
-        text: `+${count}`,
+        text: `+${collapsed.length}`,
         anchor,
         baseline: "center",
         color: labelColor,
         aggregate,
       });
-
-      b = end;
     }
   }
 
