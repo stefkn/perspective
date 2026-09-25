@@ -220,8 +220,14 @@ export function layoutLaneBands(
     const sideLanes = lanes.filter((l) => sides[l.id] === side);
     if (sideLanes.length === 0) continue;
 
+    // The manager lists lanes top-to-bottom. Above the axis (negative side) the
+    // first item sits furthest from the axis, so iterate in reverse there to
+    // keep list order and on-screen order in sync. Below the axis (positive
+    // side) the first item sits closest to the axis, so keep list order.
+    const ordered = side === -1 ? [...sideLanes].reverse() : sideLanes;
+
     let cursor = MAIN_AXIS_HALF + LANE_GAP;
-    for (const lane of sideLanes) {
+    for (const lane of ordered) {
       const half = configs[lane.id].half;
       const center = side * (cursor + half);
       bands[lane.id] = { center, half };
