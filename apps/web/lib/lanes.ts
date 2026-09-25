@@ -62,7 +62,7 @@ export const MAIN_AXIS_HALF = 48;
 export const LANE_GAP = 12;
 
 // Extra perpendicular room reserved beyond the outermost lane's band, so the
-// lane title and the "+n more" summary strip (which sit just outside the band
+// lane title and the "~n+ more" summary strip (which sit just outside the band
 // edge) can still be panned fully into view instead of clipping at the edge.
 export const LANE_OUTER_PAD = 28;
 

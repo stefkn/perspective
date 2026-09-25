@@ -19,7 +19,7 @@ export interface TimelineEvent extends EntityDetail {
   dayIndex?: number;
 }
 
-// A collapsed set of intervals rendered as a single "+n more" bar. Carried on
+// A collapsed set of intervals rendered as a single "~n+ more" block. Carried on
 // pickable layers so a hover can show a tooltip and a tap can zoom in.
 export interface AggregateInfo {
   startYear: number;

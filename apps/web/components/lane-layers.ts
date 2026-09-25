@@ -89,13 +89,13 @@ const DASH_EXTENSION = new PathStyleExtension({ dash: true });
 const INTERVAL_BAND: LaneBand = { center: 0, half: 0 };
 
 // Progressive disclosure: a lane renders individual (named) bands and collapses
-// the remaining visible intervals into a single "+n more" block. Order of
+// the remaining visible intervals into a single "~n+ more" block. Order of
 // significance decides which intervals stay individual, and intervals too thin
 // to read always collapse regardless of significance. The number of kept bands
 // is also bounded by how many fit in the lane's perpendicular half (see below),
 // so this is only the absolute ceiling.
 const BUDGET_BANDS = 40;
-// How many collapsed titles the "+n more" block carries for its hover tooltip.
+// How many collapsed titles the "~n+ more" block carries for its hover tooltip.
 const MORE_NAMES_HINT = 3;
 
 // Lane assignment depends only on each interval's start/end year, so it is
@@ -507,7 +507,7 @@ export function buildIntervalBands<T extends Interval = Interval>(
   }
 
   // Progressive disclosure: keep the most significant intervals that are wide
-  // enough to read as individual bands; collapse the rest into one "+n more"
+  // enough to read as individual bands; collapse the rest into one "~n+ more"
   // block. The budget is bounded by how many stacked sub-lanes actually fit
   // inside the lane's perpendicular half, so the kept bands don't spill off
   // screen. The always-on period band (half = 0) is unbounded and never
@@ -611,7 +611,7 @@ export function buildIntervalBands<T extends Interval = Interval>(
     ];
   });
 
-  // A single "+n more" summary block for the collapsed intervals. Bucketing
+  // A single "~n+ more" summary block for the collapsed intervals. Bucketing
   // the hidden set into per-screen-slice chips produced a strip of "+n" blocks
   // whose counts flickered on every scroll, so instead one contiguous block
   // spans the visible stretch where entities are being hidden. It is pickable
@@ -679,7 +679,7 @@ export function buildIntervalBands<T extends Interval = Interval>(
           (stripLo + stripHi) / 2,
           orientation === "horizontal" ? off : off + thickness / 2 + 5,
         ),
-        text: `+${collapsed.length}`,
+        text: `~${collapsed.length.toLocaleString("en-US")}+ more`,
         anchor,
         baseline: "center",
         color: labelColor,

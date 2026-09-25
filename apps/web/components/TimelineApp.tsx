@@ -883,7 +883,7 @@ export default function TimelineApp() {
             style={{ left: hoverAggregate.x + 14, top: hoverAggregate.y + 16 }}
           >
             <div className="aggregate-tooltip-count">
-              +{hoverAggregate.count.toLocaleString("en-US")} more
+              ~{hoverAggregate.count.toLocaleString("en-US")}+ more
               {hoverAggregate.unitNoun ? ` ${hoverAggregate.unitNoun}` : ""}
             </div>
             {hoverAggregate.names.length > 0 && (
