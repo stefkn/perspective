@@ -527,4 +527,15 @@ button {
     right: 12px;
     max-width: none;
   }
+
+  .lane-toggles-panel {
+    position: fixed;
+    top: 56px;
+    left: 8px;
+    right: 8px;
+    min-width: 0;
+    max-width: none;
+    max-height: calc(100dvh - 64px);
+    overflow-y: auto;
+  }
 }
