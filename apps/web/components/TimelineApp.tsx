@@ -291,6 +291,8 @@ export default function TimelineApp() {
     });
   }, []);
 
+  const clearPins = useCallback(() => setPinned(new Set()), []);
+
   const laneSides = useMemo(() => {
     const sides = {} as Record<LaneId, -1 | 1>;
     let side: -1 | 1 = -1;
@@ -860,6 +862,11 @@ export default function TimelineApp() {
           onReorder={reorderItem}
           onSetHalf={setLaneHalf}
         />
+        {pinned.size > 0 && (
+          <button className="app-clear-pins" onClick={clearPins}>
+            Clear pins ({pinned.size})
+          </button>
+        )}
         <button className="app-reset" onClick={resetView}>
           Reset view
         </button>
