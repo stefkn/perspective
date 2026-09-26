@@ -23,6 +23,7 @@ import type { LaneBand, LaneDefinition, LaneId } from "../lib/lanes";
 import {
   buildPeriodBands,
   buildLaneLayers,
+  PIN_HIGHLIGHT,
   STICKY_RULER_INSET,
   STICKY_RULER_LABEL_OFFSET,
 } from "./lane-layers";
@@ -94,6 +95,7 @@ interface TimelineProps {
   scale: Scale;
   viewState: TimeViewState;
   minSignificance: number;
+  pinned: ReadonlySet<string>;
   coordExtent: [number, number];
   labelAlpha: Record<string, number>;
   visibleCoordRange: [number, number] | null;
@@ -127,6 +129,7 @@ export default function Timeline({
   scale,
   viewState,
   minSignificance,
+  pinned,
   coordExtent,
   labelAlpha,
   visibleCoordRange,
@@ -354,10 +357,13 @@ export default function Timeline({
 
     const eventPoints = events
       .map((event) => {
-        const opacity = opacityForSignificance(
-          event.significance ?? 0,
-          minSignificance,
-        );
+        // Pinned events stay fully visible however far out the view is zoomed.
+        const opacity = pinned.has(event.id)
+          ? 1
+          : opacityForSignificance(
+              event.significance ?? 0,
+              minSignificance,
+            );
         if (opacity <= 0) return null;
         return {
           position: offset(yearToCoord(event.year, scale), 0),
@@ -367,6 +373,8 @@ export default function Timeline({
         };
       })
       .filter((p): p is NonNullable<typeof p> => p !== null);
+
+    const pinnedEventRings = eventPoints.filter((p) => pinned.has(p.event.id));
 
     const labels = events
       .filter((event) => {
@@ -381,10 +389,12 @@ export default function Timeline({
         return {
           position: offset(yearToCoord(event.year, scale), perp),
           text: event.title,
-          color: [
-            ...significanceColor(event.significance ?? 0, 1).slice(0, 3),
-            Math.round(230 * alpha),
-          ] as [number, number, number, number],
+          color: pinned.has(event.id)
+            ? PIN_HIGHLIGHT
+            : ([
+                ...significanceColor(event.significance ?? 0, 1).slice(0, 3),
+                Math.round(230 * alpha),
+              ] as [number, number, number, number]),
           event,
         };
       });
@@ -452,7 +462,7 @@ export default function Timeline({
       return offset(d.coord + spread, 0);
     };
 
-    const laneOptions = { orientation, scale, coordExtent, timeZoom, visibleCoordRange: visibleCoordRange ?? undefined, visiblePerpRange: visiblePerpRange ?? undefined };
+    const laneOptions = { orientation, scale, coordExtent, timeZoom, pinned, visibleCoordRange: visibleCoordRange ?? undefined, visiblePerpRange: visiblePerpRange ?? undefined };
     const laneLayers = lanes.flatMap((lane) =>
       buildLaneLayers(lane, laneBands[lane.id], laneOptions),
     );
@@ -604,6 +614,20 @@ export default function Timeline({
         fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
         characterSet: "auto",
         pickable: false,
+      }),
+      new ScatterplotLayer({
+        id: "pinned-event-rings",
+        data: pinnedEventRings,
+        getPosition: (d) => d.position,
+        getFillColor: [0, 0, 0, 0],
+        getLineColor: PIN_HIGHLIGHT,
+        stroked: true,
+        getLineWidth: 2,
+        lineWidthMinPixels: 1.5,
+        radiusUnits: "pixels",
+        getRadius: 9,
+        pickable: false,
+        parameters: { depthTest: false },
       }),
       new ScatterplotLayer({
         id: "events",
@@ -763,6 +787,7 @@ export default function Timeline({
     orientation,
     scale,
     minSignificance,
+    pinned,
     coordExtent,
     labelAlpha,
     visibleCoordRange,

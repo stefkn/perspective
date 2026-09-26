@@ -62,6 +62,7 @@ const MAX_ZOOM = 16;
 const FIT_PAD = 1.15;
 
 const LANE_STORAGE_KEY = "perspective.lanes";
+const PIN_STORAGE_KEY = "perspective.pinned";
 
 function defaultLaneState(): {
   items: LaneItem[];
@@ -243,6 +244,9 @@ export default function TimelineApp() {
   const items = laneState.items;
   const configs = laneState.configs;
 
+  const [pinned, setPinned] = useState<ReadonlySet<string>>(new Set());
+  const [pinsHydrated, setPinsHydrated] = useState(false);
+
   const [perpOffset, setPerpOffset] = useState(0);
 
   const updateLane = useCallback(
@@ -277,6 +281,17 @@ export default function TimelineApp() {
       return { items, configs: s.configs };
     });
   }, []);
+
+  const togglePin = useCallback((id: string) => {
+    setPinned((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const clearPins = useCallback(() => setPinned(new Set()), []);
 
   const laneSides = useMemo(() => {
     const sides = {} as Record<LaneId, -1 | 1>;
@@ -326,6 +341,36 @@ export default function TimelineApp() {
       // Ignore storage failures (private mode, quota, etc).
     }
   }, [laneHydrated, items, configs]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const raw = window.localStorage.getItem(PIN_STORAGE_KEY);
+      if (raw) {
+        const parsed: unknown = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          setPinned(
+            new Set(parsed.filter((id): id is string => typeof id === "string")),
+          );
+        }
+      }
+    } catch {
+      // Ignore corrupted storage.
+    }
+    setPinsHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (!pinsHydrated || typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(
+        PIN_STORAGE_KEY,
+        JSON.stringify([...pinned]),
+      );
+    } catch {
+      // Ignore storage failures (private mode, quota, etc).
+    }
+  }, [pinsHydrated, pinned]);
 
   const clampPerp = useCallback(
     (offset: number) => {
@@ -613,8 +658,8 @@ export default function TimelineApp() {
   );
 
   const labelTargets = useMemo(
-    () => resolveLabelTargets(labelBoxes, orientation),
-    [labelBoxes, orientation],
+    () => resolveLabelTargets(labelBoxes, orientation, pinned),
+    [labelBoxes, orientation, pinned],
   );
 
   const labelAlpha = useAnimatedAlphas(labelTargets);
@@ -813,10 +858,17 @@ export default function TimelineApp() {
           lanes={LANES}
           items={items}
           configs={configs}
+          pinnedCount={pinned.size}
           onToggle={toggleLane}
           onReorder={reorderItem}
           onSetHalf={setLaneHalf}
+          onClearPins={clearPins}
         />
+        {pinned.size > 0 && (
+          <button className="app-clear-pins" onClick={clearPins}>
+            Clear pins ({pinned.size})
+          </button>
+        )}
         <button className="app-reset" onClick={resetView}>
           Reset view
         </button>
@@ -847,6 +899,7 @@ export default function TimelineApp() {
               scale={scale}
               viewState={viewState}
               minSignificance={minSignificance}
+              pinned={pinned}
               coordExtent={coordExtent}
               labelAlpha={labelAlpha}
               visibleCoordRange={visibleCoordRange}
@@ -897,6 +950,8 @@ export default function TimelineApp() {
         {selectedEvent && (
           <EventDetail
             event={selectedEvent}
+            pinned={pinned.has(selectedEvent.id)}
+            onTogglePin={() => togglePin(selectedEvent.id)}
             onClose={() => setSelectedEvent(null)}
           />
         )}
