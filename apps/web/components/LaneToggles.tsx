@@ -18,9 +18,11 @@ interface LaneTogglesProps {
   lanes: LaneDefinition[];
   items: LaneItem[];
   configs: Record<LaneId, LaneConfig>;
+  pinnedCount: number;
   onToggle: (id: LaneId) => void;
   onReorder: (item: LaneItem, toIndex: number) => void;
   onSetHalf: (id: LaneId, half: number) => void;
+  onClearPins: () => void;
 }
 
 function rgb(color: [number, number, number]): string {
@@ -47,9 +49,11 @@ export default function LaneToggles({
   lanes,
   items,
   configs,
+  pinnedCount,
   onToggle,
   onReorder,
   onSetHalf,
+  onClearPins,
 }: LaneTogglesProps) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -253,6 +257,19 @@ export default function LaneToggles({
               </div>
             );
           })}
+          {pinnedCount > 0 && (
+            <div className="lane-toggles-pins">
+              <span className="lane-toggles-pins-count">
+                {pinnedCount} pinned
+              </span>
+              <button
+                className="lane-toggles-pins-clear"
+                onClick={onClearPins}
+              >
+                Clear pins
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>

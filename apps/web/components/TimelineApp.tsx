@@ -858,9 +858,11 @@ export default function TimelineApp() {
           lanes={LANES}
           items={items}
           configs={configs}
+          pinnedCount={pinned.size}
           onToggle={toggleLane}
           onReorder={reorderItem}
           onSetHalf={setLaneHalf}
+          onClearPins={clearPins}
         />
         {pinned.size > 0 && (
           <button className="app-clear-pins" onClick={clearPins}>
