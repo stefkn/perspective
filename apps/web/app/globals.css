@@ -423,6 +423,34 @@ button {
   color: var(--text);
 }
 
+.event-detail-pin {
+  position: absolute;
+  top: 8px;
+  right: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+}
+
+.event-detail-pin:hover {
+  color: var(--text);
+}
+
+.event-detail-pin[aria-pressed="true"] {
+  color: var(--accent-2);
+}
+
+.event-detail-pin[aria-pressed="true"] svg {
+  fill: var(--accent-2);
+  fill-opacity: 0.25;
+}
+
 .event-detail-year {
   font-size: 11px;
   letter-spacing: 0.08em;
