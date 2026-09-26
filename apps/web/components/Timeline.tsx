@@ -457,7 +457,7 @@ export default function Timeline({
       return offset(d.coord + spread, 0);
     };
 
-    const laneOptions = { orientation, scale, coordExtent, timeZoom, visibleCoordRange: visibleCoordRange ?? undefined, visiblePerpRange: visiblePerpRange ?? undefined };
+    const laneOptions = { orientation, scale, coordExtent, timeZoom, pinned, visibleCoordRange: visibleCoordRange ?? undefined, visiblePerpRange: visiblePerpRange ?? undefined };
     const laneLayers = lanes.flatMap((lane) =>
       buildLaneLayers(lane, laneBands[lane.id], laneOptions),
     );

@@ -176,6 +176,7 @@ export interface LaneOptions {
   scale: Scale;
   coordExtent: [number, number];
   timeZoom: number;
+  pinned: ReadonlySet<string>;
   visibleCoordRange?: [number, number];
   visiblePerpRange?: [number, number];
 }
@@ -197,6 +198,7 @@ interface IntervalBandOptions<T extends Interval = Interval> {
   dashedEstimated?: boolean;
   title?: string;
   unitNoun?: string;
+  pinned: ReadonlySet<string>;
   visibleCoordRange?: [number, number];
   visiblePerpRange?: [number, number];
 }
@@ -478,6 +480,7 @@ export function buildIntervalBands<T extends Interval = Interval>(
     dashedEstimated,
     title,
     unitNoun,
+    pinned,
     visibleCoordRange,
     visiblePerpRange,
   } = opts;
@@ -510,19 +513,28 @@ export function buildIntervalBands<T extends Interval = Interval>(
   // enough to read as individual bands; collapse the rest into one "~n+ more"
   // block. The budget is bounded by how many stacked sub-lanes actually fit
   // inside the lane's perpendicular half, so the kept bands don't spill off
-  // screen. The always-on period band (half = 0) is unbounded and never
+  // screen. Pinned intervals are exempt from both the budget and the
+  // readability gate: they stay individual however thin or crowded the lane
+  // gets. The always-on period band (half = 0) is unbounded and never
   // collapses (its sub-pixel spans are just dropped rather than summarized).
   const collapsible = band.half > 0;
   const budget = collapsible
     ? Math.min(BUDGET_BANDS, Math.max(2, Math.floor(band.half / 8)))
     : Infinity;
 
-  const sorted = [...visible].sort(
-    (a, b) => (b.interval.significance ?? 0) - (a.interval.significance ?? 0),
-  );
+  const sorted = [...visible].sort((a, b) => {
+    const aPinned = pinned.has(a.interval.id);
+    const bPinned = pinned.has(b.interval.id);
+    if (aPinned !== bPinned) return aPinned ? -1 : 1;
+    return (b.interval.significance ?? 0) - (a.interval.significance ?? 0);
+  });
   const individual: typeof visible = [];
   const collapsed: typeof visible = [];
   for (const v of sorted) {
+    if (pinned.has(v.interval.id)) {
+      individual.push(v);
+      continue;
+    }
     const readable = (v.c1 - v.c0) * timeScale >= MIN_BAND_LABEL_PX;
     if (readable && individual.length < budget) individual.push(v);
     else if (collapsible) collapsed.push(v);
@@ -1211,6 +1223,7 @@ export function buildLaneLayers(
       dashedEstimated: true,
       title: "Notable lifespans",
       unitNoun: "notable people",
+      pinned: opts.pinned,
       visibleCoordRange: opts.visibleCoordRange,
       visiblePerpRange: opts.visiblePerpRange,
     });
@@ -1233,6 +1246,7 @@ export function buildLaneLayers(
       dashedEstimated: true,
       title: "Cultural works",
       unitNoun: "cultural works",
+      pinned: opts.pinned,
       visibleCoordRange: opts.visibleCoordRange,
       visiblePerpRange: opts.visiblePerpRange,
     });
@@ -1255,6 +1269,7 @@ export function buildLaneLayers(
       dashedEstimated: true,
       title: "Wars",
       unitNoun: "wars",
+      pinned: opts.pinned,
       visibleCoordRange: opts.visibleCoordRange,
       visiblePerpRange: opts.visiblePerpRange,
     });
@@ -1273,6 +1288,7 @@ export function buildLaneLayers(
     labelColor: POWERS_LABEL,
     title: "Major world powers",
     unitNoun: "world powers",
+    pinned: opts.pinned,
     visibleCoordRange: opts.visibleCoordRange,
     visiblePerpRange: opts.visiblePerpRange,
   });
@@ -1280,7 +1296,7 @@ export function buildLaneLayers(
 
 // The timeline's own period bands, always rendered (not toggleable).
 export function buildPeriodBands(opts: LaneOptions): Layer[] {
-  const { orientation, scale, coordExtent, timeZoom, visibleCoordRange, visiblePerpRange } = opts;
+  const { orientation, scale, coordExtent, timeZoom, pinned, visibleCoordRange, visiblePerpRange } = opts;
   return buildIntervalBands({
     id: "periods",
     assigned: PERIODS_ASSIGNED,
@@ -1293,6 +1309,7 @@ export function buildPeriodBands(opts: LaneOptions): Layer[] {
     fillColor: PERIOD_FILL,
     strokeColor: PERIOD_STROKE,
     labelColor: PERIOD_LABEL,
+    pinned,
     visibleCoordRange,
     visiblePerpRange,
   });
