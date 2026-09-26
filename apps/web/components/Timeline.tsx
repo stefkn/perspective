@@ -23,6 +23,7 @@ import type { LaneBand, LaneDefinition, LaneId } from "../lib/lanes";
 import {
   buildPeriodBands,
   buildLaneLayers,
+  PIN_HIGHLIGHT,
   STICKY_RULER_INSET,
   STICKY_RULER_LABEL_OFFSET,
 } from "./lane-layers";
@@ -373,6 +374,8 @@ export default function Timeline({
       })
       .filter((p): p is NonNullable<typeof p> => p !== null);
 
+    const pinnedEventRings = eventPoints.filter((p) => pinned.has(p.event.id));
+
     const labels = events
       .filter((event) => {
         if (event.id === selectedEvent?.id) return false;
@@ -386,10 +389,12 @@ export default function Timeline({
         return {
           position: offset(yearToCoord(event.year, scale), perp),
           text: event.title,
-          color: [
-            ...significanceColor(event.significance ?? 0, 1).slice(0, 3),
-            Math.round(230 * alpha),
-          ] as [number, number, number, number],
+          color: pinned.has(event.id)
+            ? PIN_HIGHLIGHT
+            : ([
+                ...significanceColor(event.significance ?? 0, 1).slice(0, 3),
+                Math.round(230 * alpha),
+              ] as [number, number, number, number]),
           event,
         };
       });
@@ -609,6 +614,20 @@ export default function Timeline({
         fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
         characterSet: "auto",
         pickable: false,
+      }),
+      new ScatterplotLayer({
+        id: "pinned-event-rings",
+        data: pinnedEventRings,
+        getPosition: (d) => d.position,
+        getFillColor: [0, 0, 0, 0],
+        getLineColor: PIN_HIGHLIGHT,
+        stroked: true,
+        getLineWidth: 2,
+        lineWidthMinPixels: 1.5,
+        radiusUnits: "pixels",
+        getRadius: 9,
+        pickable: false,
+        parameters: { depthTest: false },
       }),
       new ScatterplotLayer({
         id: "events",
