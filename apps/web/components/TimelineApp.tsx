@@ -656,8 +656,8 @@ export default function TimelineApp() {
   );
 
   const labelTargets = useMemo(
-    () => resolveLabelTargets(labelBoxes, orientation),
-    [labelBoxes, orientation],
+    () => resolveLabelTargets(labelBoxes, orientation, pinned),
+    [labelBoxes, orientation, pinned],
   );
 
   const labelAlpha = useAnimatedAlphas(labelTargets);
@@ -890,6 +890,7 @@ export default function TimelineApp() {
               scale={scale}
               viewState={viewState}
               minSignificance={minSignificance}
+              pinned={pinned}
               coordExtent={coordExtent}
               labelAlpha={labelAlpha}
               visibleCoordRange={visibleCoordRange}

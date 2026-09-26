@@ -94,6 +94,7 @@ interface TimelineProps {
   scale: Scale;
   viewState: TimeViewState;
   minSignificance: number;
+  pinned: ReadonlySet<string>;
   coordExtent: [number, number];
   labelAlpha: Record<string, number>;
   visibleCoordRange: [number, number] | null;
@@ -127,6 +128,7 @@ export default function Timeline({
   scale,
   viewState,
   minSignificance,
+  pinned,
   coordExtent,
   labelAlpha,
   visibleCoordRange,
@@ -354,10 +356,13 @@ export default function Timeline({
 
     const eventPoints = events
       .map((event) => {
-        const opacity = opacityForSignificance(
-          event.significance ?? 0,
-          minSignificance,
-        );
+        // Pinned events stay fully visible however far out the view is zoomed.
+        const opacity = pinned.has(event.id)
+          ? 1
+          : opacityForSignificance(
+              event.significance ?? 0,
+              minSignificance,
+            );
         if (opacity <= 0) return null;
         return {
           position: offset(yearToCoord(event.year, scale), 0),
@@ -763,6 +768,7 @@ export default function Timeline({
     orientation,
     scale,
     minSignificance,
+    pinned,
     coordExtent,
     labelAlpha,
     visibleCoordRange,
