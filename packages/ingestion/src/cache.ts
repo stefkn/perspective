@@ -1,10 +1,10 @@
 // Simple JSON-file cache for expensive, stable lookups (vital-articles list
 // pages and title→QID resolution). Keeps re-runs cheap and rate-limit friendly.
 
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
-import { DATA_DIR } from "./checkpoint";
+import { DATA_DIR, writeAtomic } from "./checkpoint";
 
 const CACHE_DIR = resolve(DATA_DIR, "cache");
 
@@ -23,8 +23,9 @@ export async function cacheGet<T>(key: string): Promise<T | undefined> {
 }
 
 export async function cacheSet<T>(key: string, value: T): Promise<void> {
-  await mkdir(CACHE_DIR, { recursive: true });
-  await writeFile(keyPath(key), JSON.stringify(value));
+  // Atomic so a kill mid-write can't truncate the cache and make the next run
+  // discard every previously cached entry.
+  await writeAtomic(keyPath(key), JSON.stringify(value));
 }
 
 // Load a whole title→QID map, returning the known entries (persisted across runs).
