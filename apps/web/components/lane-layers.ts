@@ -11,7 +11,7 @@ import {
 import {
   assignIntervalLanes,
   fractionToPerp,
-  laneOffset,
+  intervalRowPerp,
   rowsThatFit,
   valueToFraction,
   type AssignedInterval,
@@ -714,7 +714,7 @@ export function buildIntervalBands<T extends Interval = Interval>(
 
   // Individual bands (full color, stacked into sub-lanes).
   const bandData = individual.map(({ interval, c0, c1 }) => {
-    const off = band.center + laneOffset(laneById.get(interval.id) ?? 0, thickness);
+    const off = intervalRowPerp(laneById.get(interval.id) ?? 0, band, thickness);
     return {
       polygon: bandPolygon(c0, c1, off, thickness, orientation),
       estimated: interval.estimated,
@@ -726,7 +726,7 @@ export function buildIntervalBands<T extends Interval = Interval>(
   // without hiding the band's own color.
   const pinnedHaloData = individual.flatMap(({ interval, c0, c1 }) => {
     if (!pinned.has(interval.id)) return [];
-    const off = band.center + laneOffset(laneById.get(interval.id) ?? 0, thickness);
+    const off = intervalRowPerp(laneById.get(interval.id) ?? 0, band, thickness);
     const pad = 3;
     const padCoord = pad / timeScale;
     return [
@@ -764,7 +764,7 @@ export function buildIntervalBands<T extends Interval = Interval>(
       coord = lo >= hi ? (vMin + vMax) / 2 : Math.min(Math.max(coord, lo), hi);
     }
 
-    const off = band.center + laneOffset(laneById.get(interval.id) ?? 0, thickness);
+    const off = intervalRowPerp(laneById.get(interval.id) ?? 0, band, thickness);
     labelCandidates.push({
       id: `${id}:${interval.id}`,
       text: displayTitle,

@@ -42,20 +42,42 @@ export function assignIntervalLanes<T extends Interval>(
   return result;
 }
 
-// Perpendicular offset of a sub-lane relative to its parent band's center.
+// Perpendicular offset of a sub-lane row relative to a band's center. Rows
+// alternate to either side of the center. Interval lanes don't lay out this
+// way anymore (see intervalRowPerp); it remains for the period band, which is
+// a zero-height band sitting on the axis itself.
 export function laneOffset(lane: number, thickness: number): number {
   const direction = lane % 2 === 0 ? -1 : 1;
   const level = Math.floor(lane / 2);
   return direction * (thickness / 2 + 6 + level * 16);
 }
 
-// How many sub-lane rows fit inside a band of the given half-width: the
-// leading rows whose outer edge, as positioned by laneOffset, stays within
-// the band's half-width.
+// Perpendicular center of a sub-lane row inside a band. Rows fill from the
+// band's inner edge (the side nearest the main axis) outward, so the first
+// rows hug the timeline and widening the lane appends rows beyond the
+// existing ones instead of shifting them all further away. The period band
+// (half = 0) has no inner edge to anchor to and keeps alternating around the
+// axis instead.
+export function intervalRowPerp(
+  row: number,
+  band: LaneBand,
+  thickness: number,
+): number {
+  if (band.half <= 0) return band.center + laneOffset(row, thickness);
+  const side = band.center >= 0 ? 1 : -1;
+  const inner = band.center - side * band.half;
+  return inner + side * (thickness / 2 + 6 + row * 16);
+}
+
+// How many sub-lane rows fit inside a band of the given half-width: rows
+// filled from the inner edge outward, stopping short of the outer edge where
+// the "~n+ more" strip (centered on that edge) needs its slice of the band.
 export function rowsThatFit(half: number, thickness: number): number {
   let rows = 0;
-  while (Math.abs(laneOffset(rows, thickness)) + thickness / 2 <= half) rows++;
-  return rows;
+  while (rows < 512 && thickness + 6 + rows * 16 <= 2 * half - thickness / 2) {
+    rows++;
+  }
+  return Math.max(rows, 1);
 }
 
 export interface LaneBand {
