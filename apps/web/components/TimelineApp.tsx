@@ -177,32 +177,50 @@ function useAnimatedAlphas(
   const targetsRef = useRef(targets);
   targetsRef.current = targets;
   const alphasRef = useRef<Record<string, number>>({});
+  const rafRef = useRef(0);
+  const runningRef = useRef(false);
+
+  // One frame of easing toward the current targets. Schedules the next frame
+  // while something is still moving, then parks the loop once settled.
+  const tick = useCallback(() => {
+    const target = targetsRef.current;
+    const current = alphasRef.current;
+    const next: Record<string, number> = {};
+    let changed = false;
+    for (const id of new Set([
+      ...Object.keys(target),
+      ...Object.keys(current),
+    ])) {
+      const t = target[id] ?? 0;
+      const c = current[id] ?? 0;
+      let n = c + (t - c) * 0.18;
+      if (Math.abs(t - n) < 0.01) n = t;
+      if (n > 0.004) next[id] = n;
+      if (Math.abs(n - c) > 0.003) changed = true;
+    }
+    alphasRef.current = next;
+    if (changed) {
+      setAlphas(next);
+      rafRef.current = requestAnimationFrame(tick);
+    } else {
+      runningRef.current = false;
+    }
+  }, []);
 
   useEffect(() => {
-    let raf = 0;
-    const tick = () => {
-      const target = targetsRef.current;
-      const current = alphasRef.current;
-      const next: Record<string, number> = {};
-      let changed = false;
-      for (const id of new Set([
-        ...Object.keys(target),
-        ...Object.keys(current),
-      ])) {
-        const t = target[id] ?? 0;
-        const c = current[id] ?? 0;
-        let n = c + (t - c) * 0.18;
-        if (Math.abs(t - n) < 0.01) n = t;
-        if (n > 0.004) next[id] = n;
-        if (Math.abs(n - c) > 0.003) changed = true;
-      }
-      alphasRef.current = next;
-      if (changed) setAlphas(next);
-      raf = requestAnimationFrame(tick);
+    return () => {
+      cancelAnimationFrame(rafRef.current);
+      runningRef.current = false;
     };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
   }, []);
+
+  // Kick the loop whenever new targets arrive (including mount) unless it is
+  // already animating; the loop never runs while idle.
+  useEffect(() => {
+    if (runningRef.current) return;
+    runningRef.current = true;
+    rafRef.current = requestAnimationFrame(tick);
+  }, [targets, tick]);
 
   return alphas;
 }
