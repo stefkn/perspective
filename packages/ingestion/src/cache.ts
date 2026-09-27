@@ -43,4 +43,7 @@ function sanitize(s: string): string {
 }
 
 export const cacheKeyForPage = (page: string) => `vital-${sanitize(page)}`;
-export const RESOLVED_CACHE_KEY = "resolved-title-qid";
+// v2: earlier entries could cache a redirecting title as permanently null
+// (the resolver used to ignore the API's redirect chain). Renaming the key
+// invalidates those poisoned entries so every title re-resolves once.
+export const RESOLVED_CACHE_KEY = "resolved-title-qid-v2";

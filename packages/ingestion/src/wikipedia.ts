@@ -46,9 +46,18 @@ export async function resolveTitles(titles: string[]): Promise<ResolvedTitle[]> 
     for (const page of json.query.pages) {
       byTitle.set(page.title, page.pageprops?.wikibase_item ?? null);
     }
-    // Map back to requested titles; redirect targets are keyed by their title.
+    // The API answers under the normalized/redirected title, but the cache is
+    // keyed by what we asked for. Walk each requested title through the
+    // normalization and redirect chains to find its page; otherwise a
+    // redirecting title ("USSR" -> "Soviet Union") would be cached as null
+    // forever.
     for (const title of batch) {
-      cache.set(title, byTitle.get(title) ?? null);
+      let resolved = title;
+      const normalized = json.query.normalized?.find((n) => n.from === resolved);
+      if (normalized) resolved = normalized.to;
+      const redirected = json.query.redirects?.find((r) => r.from === resolved);
+      if (redirected) resolved = redirected.to;
+      cache.set(title, byTitle.get(resolved) ?? null);
     }
     // Persist after each batch so interrupted runs can resume.
     await cacheSetMap(RESOLVED_CACHE_KEY, cache);
@@ -64,6 +73,8 @@ export async function resolveTitles(titles: string[]): Promise<ResolvedTitle[]> 
 
 interface ResolveResponse {
   query: {
+    normalized?: { from: string; to: string }[];
+    redirects?: { from: string; to: string }[];
     pages: { title: string; pageprops?: { wikibase_item?: string } }[];
   };
 }
