@@ -62,6 +62,11 @@ export const PIN_HIGHLIGHT: [number, number, number, number] = [
   127, 209, 255, 255,
 ];
 
+// Accent for the currently selected entity (info box open). White reads as
+// "you are here" against the dark lanes and stays distinct from the pinned
+// accent.
+const SELECTED_COLOR: [number, number, number, number] = [255, 255, 255, 255];
+
 const PERIOD_FILL: [number, number, number, number] = [118, 158, 220, 34];
 const PERIOD_STROKE: [number, number, number, number] = [150, 190, 240, 90];
 const PERIOD_LABEL: [number, number, number, number] = [176, 200, 232, 220];
@@ -190,6 +195,9 @@ export interface LaneOptions {
   coordExtent: [number, number];
   timeZoom: number;
   pinned: ReadonlySet<string>;
+  // Id of the currently selected entity (info box open), if any; its band
+  // gets a highlight in its lane.
+  selectedId?: string | null;
   visibleCoordRange?: [number, number];
   visiblePerpRange?: [number, number];
 }
@@ -212,6 +220,7 @@ interface IntervalBandOptions<T extends Interval = Interval> {
   title?: string;
   unitNoun?: string;
   pinned: ReadonlySet<string>;
+  selectedId?: string | null;
   visibleCoordRange?: [number, number];
   visiblePerpRange?: [number, number];
 }
@@ -612,6 +621,7 @@ export function buildIntervalBands<T extends Interval = Interval>(
     title,
     unitNoun,
     pinned,
+    selectedId,
     visibleCoordRange,
     visiblePerpRange,
   } = opts;
@@ -773,7 +783,11 @@ export function buildIntervalBands<T extends Interval = Interval>(
     renderedCache.set(id, rendered);
 
     for (const v of sorted) {
-      if (pinned.has(v.interval.id) || rendered.has(v.interval.id)) {
+      if (
+        pinned.has(v.interval.id) ||
+        rendered.has(v.interval.id) ||
+        v.interval.id === selectedId
+      ) {
         individual.push(v);
       } else {
         collapsed.push(v);
@@ -795,6 +809,7 @@ export function buildIntervalBands<T extends Interval = Interval>(
       polygon: bandPolygon(c0, c1, off, thickness, orientation),
       estimated: interval.estimated,
       pinned: pinned.has(interval.id),
+      selected: interval.id === selectedId,
     };
   });
 
@@ -818,6 +833,27 @@ export function buildIntervalBands<T extends Interval = Interval>(
     ];
   });
 
+  // Brighter halo around the selected entity's band (info box open), drawn
+  // under the band like the pinned halo. A wider pad separates it from the
+  // pinned halo when an entity is both pinned and selected.
+  const selectedHaloData = individual.flatMap(({ interval, c0, c1 }) => {
+    if (interval.id !== selectedId) return [];
+    const off = intervalRowPerp(laneById.get(interval.id) ?? 0, band, thickness);
+    const pad = 5;
+    const padCoord = pad / timeScale;
+    return [
+      {
+        polygon: bandPolygon(
+          c0 - padCoord,
+          c1 + padCoord,
+          off,
+          thickness + pad * 2,
+          orientation,
+        ),
+      },
+    ];
+  });
+
   const viewport =
     visibleCoordRange && visiblePerpRange
       ? viewportBox(orientation, timeScale, visibleCoordRange, visiblePerpRange)
@@ -827,9 +863,11 @@ export function buildIntervalBands<T extends Interval = Interval>(
   for (const { interval, c0, c1 } of individual) {
     // Slivers admitted by the lane's width-dependent readability floor render
     // as bare ticks; a label needs this fixed legibility floor of band to sit
-    // on, no matter how wide the lane is.
+    // on, no matter how wide the lane is. Pinned and selected bands always
+    // carry their label so the highlight has a name attached.
     if (
       !pinned.has(interval.id) &&
+      interval.id !== selectedId &&
       (c1 - c0) * timeScale < MIN_BAND_LABEL_PX
     ) {
       continue;
@@ -874,7 +912,11 @@ export function buildIntervalBands<T extends Interval = Interval>(
     text: label.text,
     anchor,
     baseline: "center",
-    color: pinned.has(label.interval.id) ? PIN_HIGHLIGHT : labelColor,
+    color: pinned.has(label.interval.id)
+      ? PIN_HIGHLIGHT
+      : label.interval.id === selectedId
+        ? SELECTED_COLOR
+        : labelColor,
     detail: intervalDetail(label.interval),
   }));
 
@@ -993,6 +1035,23 @@ export function buildIntervalBands<T extends Interval = Interval>(
           }),
         ]
       : []),
+    ...(selectedHaloData.length > 0
+      ? [
+          new PolygonLayer({
+            id: `${id}-selected-halo`,
+            data: selectedHaloData,
+            getPolygon: (d: { polygon: [number, number][] }) => d.polygon,
+            filled: true,
+            getFillColor: [255, 255, 255, 36],
+            stroked: true,
+            getLineColor: [255, 255, 255, 220],
+            getLineWidth: 1,
+            lineWidthMinPixels: 1,
+            pickable: false,
+            parameters: { depthTest: false },
+          }),
+        ]
+      : []),
     new PolygonLayer({
       id: `${id}-bands`,
       data: bandData,
@@ -1003,9 +1062,11 @@ export function buildIntervalBands<T extends Interval = Interval>(
       getLineColor: (d) =>
         d.pinned
           ? PIN_HIGHLIGHT
-          : d.estimated
-            ? estimateStroke
-            : strokeColor,
+          : d.selected
+            ? SELECTED_COLOR
+            : d.estimated
+              ? estimateStroke
+              : strokeColor,
       getLineWidth: 1,
       lineWidthMinPixels: 1,
       pickable: false,
@@ -1520,6 +1581,7 @@ export function buildLaneLayers(
       title: "Notable lifespans",
       unitNoun: "notable people",
       pinned: opts.pinned,
+      selectedId: opts.selectedId,
       visibleCoordRange: opts.visibleCoordRange,
       visiblePerpRange: opts.visiblePerpRange,
     });
@@ -1543,6 +1605,7 @@ export function buildLaneLayers(
       title: "Cultural works",
       unitNoun: "cultural works",
       pinned: opts.pinned,
+      selectedId: opts.selectedId,
       visibleCoordRange: opts.visibleCoordRange,
       visiblePerpRange: opts.visiblePerpRange,
     });
@@ -1566,6 +1629,7 @@ export function buildLaneLayers(
       title: "Wars",
       unitNoun: "wars",
       pinned: opts.pinned,
+      selectedId: opts.selectedId,
       visibleCoordRange: opts.visibleCoordRange,
       visiblePerpRange: opts.visiblePerpRange,
     });
@@ -1585,6 +1649,7 @@ export function buildLaneLayers(
     title: "Major world powers",
     unitNoun: "world powers",
     pinned: opts.pinned,
+    selectedId: opts.selectedId,
     visibleCoordRange: opts.visibleCoordRange,
     visiblePerpRange: opts.visiblePerpRange,
   });
@@ -1592,7 +1657,7 @@ export function buildLaneLayers(
 
 // The timeline's own period bands, always rendered (not toggleable).
 export function buildPeriodBands(opts: LaneOptions): Layer[] {
-  const { orientation, scale, coordExtent, timeZoom, pinned, visibleCoordRange, visiblePerpRange } = opts;
+  const { orientation, scale, coordExtent, timeZoom, pinned, selectedId, visibleCoordRange, visiblePerpRange } = opts;
   return buildIntervalBands({
     id: "periods",
     assigned: PERIODS_ASSIGNED,
@@ -1606,6 +1671,7 @@ export function buildPeriodBands(opts: LaneOptions): Layer[] {
     strokeColor: PERIOD_STROKE,
     labelColor: PERIOD_LABEL,
     pinned,
+    selectedId,
     visibleCoordRange,
     visiblePerpRange,
   });
