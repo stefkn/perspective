@@ -235,13 +235,14 @@ export default function Timeline({
         const lane = otdLabelLanes[event.id];
         if (orientation === "horizontal") {
           const perp = otdPerpOffset(lane);
-          return { position: offset(coord, perp), text: event.title, event };
+          return { position: offset(coord, perp), text: event.title, event, otd: true };
         }
         const shift = otdTimeShiftPx(lane) / zoomScale;
         return {
           position: offset(coord + shift, PORTRAIT_LABEL_CLEARANCE),
           text: event.title,
           event,
+          otd: true,
         };
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -322,6 +323,7 @@ export default function Timeline({
         ),
         text: event.title,
         event,
+        otd: true,
       },
     ];
     // eslint-disable-next-line react-hooks/exhaustive-deps
