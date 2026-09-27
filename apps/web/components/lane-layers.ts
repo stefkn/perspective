@@ -673,11 +673,57 @@ export function buildIntervalBands<T extends Interval = Interval>(
       a.interval.startYear < b.interval.endYear &&
       b.interval.startYear < a.interval.endYear;
 
+    // The sticky set can outgrow the lane when the user narrows it: drop the
+    // least-significant names until both the count and the overlap depth fit
+    // again (a stable lane is within budget by construction, so this only
+    // fires on a width change or a new pin). Evicted bands fall into the
+    // strip and are retried with the other candidates on later frames, so
+    // widening the lane brings them back in significance order.
+    let evicted: Set<string> | null = null;
+    const depth = () => {
+      const events: [number, number][] = [];
+      const add = (v: (typeof visible)[number]) => {
+        events.push([v.interval.startYear, 1], [v.interval.endYear, -1]);
+      };
+      for (const rid of rendered) {
+        const v = byId.get(rid);
+        if (v) add(v);
+      }
+      for (const p of pinnedVisible) add(p);
+      events.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+      let cur = 0;
+      let max = 0;
+      for (const [, d] of events) {
+        cur += d;
+        if (cur > max) max = cur;
+      }
+      return max;
+    };
+    while (
+      rendered.size > 0 &&
+      (rendered.size + pinnedVisible.length > maxNamed || depth() > maxRows)
+    ) {
+      let worstId: string | null = null;
+      let worstSig = Infinity;
+      for (const rid of rendered) {
+        const v = byId.get(rid);
+        const sig = v ? (v.interval.significance ?? 0) : -Infinity;
+        if (sig < worstSig) {
+          worstSig = sig;
+          worstId = rid;
+        }
+      }
+      if (worstId === null) break;
+      rendered.delete(worstId);
+      (evicted ??= new Set()).add(worstId);
+    }
+
     const candidates = sorted.filter(
       (v) =>
         !pinned.has(v.interval.id) &&
         isReadable(v) &&
-        !rendered.has(v.interval.id),
+        !rendered.has(v.interval.id) &&
+        !evicted?.has(v.interval.id),
     );
     for (const v of candidates) {
       if (rendered.size + pinnedVisible.length >= maxNamed) break;
