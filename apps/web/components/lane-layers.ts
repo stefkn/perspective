@@ -466,6 +466,96 @@ function bandPolygon(
   ];
 }
 
+// Sticky sub-lane placement, keyed by lane id. Re-packing the visible subset
+// from scratch on every frame reshuffled swimlane rows whenever an entity
+// entered or left the viewport, so bands jumped around their neighbours while
+// panning. Instead each band remembers the row it was last drawn in and keeps
+// it for as long as it stays on screen; only newcomers (and bands whose row is
+// now taken) get placed. Rows are remembered for two groups: `active`, the
+// bands drawn individually last frame, and `idle`, bands that were on screen
+// but collapsed into the summary strip — both drop away once the interval
+// leaves the viewport, so the cache stays bounded.
+interface IntervalLaneMemory {
+  active: Map<string, number>;
+  idle: Map<string, number>;
+}
+
+const intervalLaneCache = new Map<string, IntervalLaneMemory>();
+
+// Assign sub-lanes to the bands that stay individual this frame. Bands with a
+// remembered row claim it first; because last frame's rows never put two
+// overlapping bands together, those claims cannot collide with each other —
+// only a band coming back from the collapsed strip has to look for a gap. The
+// rest fill gaps in start-year order, matching the one-shot greedy packing
+// this replaces, so a freshly laid out view lands on the layout it always did.
+function placeIntervalLanes<T extends Interval>(
+  laneId: string,
+  visible: T[],
+  individual: T[],
+  maxLane: number,
+): Map<string, number> {
+  const memory = intervalLaneCache.get(laneId) ?? {
+    active: new Map<string, number>(),
+    idle: new Map<string, number>(),
+  };
+  const lanes = new Map<string, number>();
+  const placed: T[][] = [];
+
+  const clashesWith = (lane: number, interval: T) =>
+    (placed[lane] ?? []).some(
+      (other) =>
+        other.startYear < interval.endYear && interval.startYear < other.endYear,
+    );
+
+  const claim = (interval: T, lane: number) => {
+    lanes.set(interval.id, lane);
+    (placed[lane] ??= []).push(interval);
+  };
+
+  const order = [...individual].sort(
+    (a, b) => a.startYear - b.startYear || a.endYear - b.endYear,
+  );
+
+  const pending: T[] = [];
+  for (const interval of order) {
+    const lane = memory.active.get(interval.id);
+    if (lane !== undefined && lane <= maxLane && !clashesWith(lane, interval)) {
+      claim(interval, lane);
+    } else {
+      pending.push(interval);
+    }
+  }
+
+  for (const interval of pending) {
+    // Prefer the row the band had while it was collapsed, if it is still free.
+    const remembered =
+      memory.active.get(interval.id) ?? memory.idle.get(interval.id);
+    if (
+      remembered !== undefined &&
+      remembered <= maxLane &&
+      !clashesWith(remembered, interval)
+    ) {
+      claim(interval, remembered);
+      continue;
+    }
+    let lane = 0;
+    while (clashesWith(lane, interval)) lane++;
+    claim(interval, lane);
+  }
+
+  // Bands on screen but collapsed hold on to their row for when they are shown
+  // again; bands outside the viewport are forgotten.
+  const idle = new Map<string, number>();
+  for (const interval of visible) {
+    if (lanes.has(interval.id)) continue;
+    const lane = memory.active.get(interval.id) ?? memory.idle.get(interval.id);
+    if (lane !== undefined) idle.set(interval.id, lane);
+  }
+  intervalLaneCache.set(laneId, { active: lanes, idle });
+
+  return lanes;
+}
+
 // Build stacked interval bands (polygons + labels) for a lane or the main axis.
 export function buildIntervalBands<T extends Interval = Interval>(
   opts: IntervalBandOptions<T>,
@@ -547,15 +637,12 @@ export function buildIntervalBands<T extends Interval = Interval>(
     else if (collapsible) collapsed.push(v);
   }
 
-  // Re-pack the kept intervals into a compact swimlane (time-ordered) so they
-  // stack tightly instead of keeping their scattered sub-lane indices from the
-  // full, pre-assigned set.
-  const laneById = new Map<string, number>();
-  for (const { interval, lane } of assignIntervalLanes(
+  const laneById = placeIntervalLanes(
+    id,
+    visible.map((v) => v.interval),
     individual.map((v) => v.interval),
-  )) {
-    laneById.set(interval.id, lane);
-  }
+    Infinity,
+  );
 
   // Individual bands (full color, stacked into sub-lanes).
   const bandData = individual.map(({ interval, c0, c1 }) => {
