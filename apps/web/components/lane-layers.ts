@@ -1140,8 +1140,14 @@ function buildSeriesLane(
   } = cfg;
   const side = band.center >= 0 ? 1 : -1;
 
+  // Estimated tail points (e.g. CO2's zero-value pre-industrial row) can fall
+  // below the dataset's non-estimated minimum, which on a log axis sits far
+  // outside the band; clamp so the dashed tail hugs the lane's inner edge.
   const perpFor = (value: number) =>
-    fractionToPerp(valueToFraction(value, min, max, scale), band);
+    fractionToPerp(
+      Math.min(Math.max(valueToFraction(value, min, max, scale), 0), 1),
+      band,
+    );
 
   // Leading estimated points (before the first measured year) are drawn as a
   // dashed extrapolation; everything from the first measured point onward is
