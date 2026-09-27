@@ -367,9 +367,16 @@ export default function TimelineApp() {
       if (raw) {
         const parsed: unknown = JSON.parse(raw);
         if (Array.isArray(parsed)) {
-          setPinned(
-            new Set(parsed.filter((id): id is string => typeof id === "string")),
+          const stored = parsed.filter(
+            (id): id is string => typeof id === "string",
           );
+          // A pin made in the brief window before hydration would otherwise be
+          // discarded here; union instead of overwrite.
+          setPinned((prev) => {
+            const merged = new Set(prev);
+            for (const id of stored) merged.add(id);
+            return merged;
+          });
         }
       }
     } catch {
