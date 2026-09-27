@@ -80,6 +80,17 @@ export function rowsThatFit(half: number, thickness: number): number {
   return Math.max(rows, 1);
 }
 
+// How wide (along time, in px) a band must be to render at a given lane
+// half-width instead of collapsing into the "~n+ more" strip. Narrow lanes
+// keep a strict readability cutoff (sub-legible specks belong in the strip);
+// wide lanes let near-sub-pixel slivers render directly — the room is there,
+// and widening a lane is exactly how you ask to see more of it. Labels stay
+// gated on the fixed 6px floor regardless (see MIN_BAND_LABEL_PX), so slivers
+// render as bare ticks and only become titled once they are legible.
+export function minBandPx(half: number): number {
+  return Math.max(1, Math.min(6, 240 / half));
+}
+
 export interface LaneBand {
   center: number;
   half: number;

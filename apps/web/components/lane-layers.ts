@@ -12,6 +12,7 @@ import {
   assignIntervalLanes,
   fractionToPerp,
   intervalRowPerp,
+  minBandPx,
   rowsThatFit,
   valueToFraction,
   type AssignedInterval,
@@ -236,7 +237,8 @@ const INTERVAL_LABEL_HEIGHT = 13;
 // Minimum on-screen band width before a label is shown. Labels are centered
 // on the band and may overflow it (staggering + leader lines keep them
 // legible), so the band only needs to be a visible anchor, not wide enough
-// to contain the title.
+// to contain the title. Band *rendering* uses the looser minBandPx(half)
+// instead, so slivers can show as bare ticks on wide lanes.
 const MIN_BAND_LABEL_PX = 6;
 const STAGGER_STEP = 14;
 const STAGGER_MAX_STEPS = 6;
@@ -640,8 +642,11 @@ export function buildIntervalBands<T extends Interval = Interval>(
   const collapsible = band.half > 0;
   const maxRows = collapsible ? rowsThatFit(band.half, thickness) : Infinity;
   const maxNamed = Math.max(BUDGET_BANDS, maxRows * NAMED_PER_ROW);
+  // Bands thinner than this (along time) collapse into the strip; a wide
+  // lane accepts slivers, a narrow one stays with the strict 6px cutoff.
+  const minPx = minBandPx(band.half);
   const isReadable = (v: (typeof visible)[number]) =>
-    (v.c1 - v.c0) * timeScale >= MIN_BAND_LABEL_PX;
+    (v.c1 - v.c0) * timeScale >= minPx;
 
   const sorted = [...visible].sort((a, b) => {
     const aPinned = pinned.has(a.interval.id);
@@ -800,6 +805,15 @@ export function buildIntervalBands<T extends Interval = Interval>(
 
   const labelCandidates: IntervalLabelCandidate[] = [];
   for (const { interval, c0, c1 } of individual) {
+    // Slivers admitted by the lane's width-dependent readability floor render
+    // as bare ticks; a label needs this fixed legibility floor of band to sit
+    // on, no matter how wide the lane is.
+    if (
+      !pinned.has(interval.id) &&
+      (c1 - c0) * timeScale < MIN_BAND_LABEL_PX
+    ) {
+      continue;
+    }
     const displayTitle = interval.estimated
       ? `≈ ${interval.title}`
       : interval.title;
