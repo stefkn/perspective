@@ -509,6 +509,25 @@ function bandPolygon(
 // of view or zooming makes it too thin to read.
 const renderedCache = new Map<string, Set<string>>();
 
+// Which intervals were in the viewport on the previous frame, per lane id.
+// Replaced wholesale every frame, so it stays bounded by the viewport
+// contents. A visible band missing from last frame's set has just scrolled
+// in (or was just revealed by a zoom), which is the only moment it may claim
+// a name ahead of bands already on screen — naming a band in place,
+// mid-viewport, is the pop-in the sticky sets exist to avoid.
+const onScreenCache = new Map<string, Set<string>>();
+
+// The admission environment (time zoom, lane half-width) each lane last
+// admitted under. A zoom or a lane-width change re-opens admission to every
+// unnamed band on screen — the view changed, so re-evaluating is expected —
+// while a bare pan never does.
+const admissionEnvCache = new Map<string, { timeScale: number; half: number }>();
+
+// How many slices the visible time range is subdivided into when handing out
+// the naming budget, so a dense recent era cannot spend the whole lane's
+// names and leave earlier centuries looking empty.
+const NAMED_SLICES = 6;
+
 // Sticky sub-lane placement, keyed by lane id. Re-packing the visible subset
 // from scratch on every frame reshuffled swimlane rows whenever an entity
 // entered or left the viewport, so bands jumped around their neighbours while
@@ -663,12 +682,23 @@ export function buildIntervalBands<T extends Interval = Interval>(
   // screen must not depend on what else happens to be in the viewport, or it
   // pops in and out as the view slides (the old top-N budget picked winners
   // globally, so bands appeared mid-viewport only after neighbours scrolled
-  // away). Blocked candidates are retried every frame and admitted as soon as
-  // a neighbour scrolls off, in significance order. Pinned intervals skip
-  // both gates; the always-on period band (half = 0) is unbounded and never
-  // collapses (its sub-pixel spans are dropped rather than summarized). The
-  // named set is also capped so titles cannot overwrite each other in views
-  // that pack hundreds of bands; the cap grows with the lane's row capacity.
+  // away). Pinned intervals skip both gates; the always-on period band
+  // (half = 0) is unbounded and never collapses (its sub-pixel spans are
+  // dropped rather than summarized). The named set is also capped so titles
+  // cannot overwrite each other in views that pack hundreds of bands; the
+  // cap grows with the lane's row capacity.
+  //
+  // Two refinements keep the cap from distorting what is shown:
+  //
+  // - The budget is subdivided across the visible time range (per-slice
+  //   quotas), so a dense recent era cannot spend the whole lane's names and
+  //   leave earlier centuries looking empty even though many bands are
+  //   hidden there.
+  // - Bands newly entering the viewport are admitted before bands that have
+  //   been sitting on screen unnamed. During a pan, freed capacity therefore
+  //   goes to the bands scrolling in at the leading edge (which scroll in
+  //   named, alongside everything else) instead of switching a mid-viewport
+  //   band from the strip to a named band in place — the "pop-in" effect.
   const collapsible = band.half > 0;
   const maxRows = collapsible ? rowsThatFit(band.half, thickness) : Infinity;
   const maxNamed = Math.max(BUDGET_BANDS, maxRows * NAMED_PER_ROW);
@@ -694,11 +724,17 @@ export function buildIntervalBands<T extends Interval = Interval>(
   } else {
     const rendered = renderedCache.get(id) ?? new Set<string>();
     const byId = new Map(visible.map((v) => [v.interval.id, v]));
+    const onScreen = onScreenCache.get(id) ?? new Set<string>();
     // Forget bands that scrolled out of view or became too thin to read;
     // both come from the view changing, which is allowed to reset a band.
+    // Dropping the screen memory too lets a band that becomes readable again
+    // after zooming in count as freshly entering.
     for (const rid of [...rendered]) {
       const v = byId.get(rid);
-      if (!v || !isReadable(v)) rendered.delete(rid);
+      if (!v || !isReadable(v)) {
+        rendered.delete(rid);
+        onScreen.delete(rid);
+      }
     }
     const pinnedVisible = sorted.filter((v) => pinned.has(v.interval.id));
     const overlaps = (
@@ -753,6 +789,17 @@ export function buildIntervalBands<T extends Interval = Interval>(
       (evicted ??= new Set()).add(worstId);
     }
 
+    // A zoom or lane-width change re-opens admission to every unnamed band on
+    // screen; a bare pan does not. During a pan, only bands scrolling in at
+    // the edges may claim names, so capacity freed by bands scrolling out
+    // never switches a mid-viewport band from the strip to a named band in
+    // place.
+    const env = admissionEnvCache.get(id);
+    if (!env || env.timeScale !== timeScale || env.half !== band.half) {
+      onScreen.clear();
+    }
+    admissionEnvCache.set(id, { timeScale, half: band.half });
+
     const candidates = sorted.filter(
       (v) =>
         !pinned.has(v.interval.id) &&
@@ -760,7 +807,33 @@ export function buildIntervalBands<T extends Interval = Interval>(
         !rendered.has(v.interval.id) &&
         !evicted?.has(v.interval.id),
     );
-    for (const v of candidates) {
+
+    // Hand out the naming budget per slice of the visible time range so the
+    // share spent on any era is bounded — otherwise the dense, significant
+    // modern era wins the whole cap and earlier centuries read as empty even
+    // though many bands are hidden there. Counts include pinned bands, which
+    // spend their region's share too.
+    const perSlice = Math.max(1, Math.floor(maxNamed / NAMED_SLICES));
+    const sliceOf = (v: (typeof visible)[number]): number => {
+      if (!visibleCoordRange) return 0;
+      const [vMin, vMax] = visibleCoordRange;
+      const t = ((v.c0 + v.c1) / 2 - vMin) / (vMax - vMin);
+      return Math.min(NAMED_SLICES - 1, Math.max(0, Math.floor(t * NAMED_SLICES)));
+    };
+    const sliceCounts = new Array<number>(NAMED_SLICES).fill(0);
+    for (const rid of rendered) {
+      const v = byId.get(rid);
+      if (v) sliceCounts[sliceOf(v)]++;
+    }
+    for (const p of pinnedVisible) sliceCounts[sliceOf(p)]++;
+
+    const bySignificance = (a: (typeof visible)[number], b: (typeof visible)[number]) =>
+      (b.interval.significance ?? 0) - (a.interval.significance ?? 0);
+    const entering = candidates
+      .filter((v) => !onScreen.has(v.interval.id))
+      .sort(bySignificance);
+
+    for (const v of entering) {
       if (rendered.size + pinnedVisible.length >= maxNamed) break;
       let overlap = 0;
       for (const rid of rendered) {
@@ -778,8 +851,17 @@ export function buildIntervalBands<T extends Interval = Interval>(
           }
         }
       }
-      if (overlap < maxRows) rendered.add(v.interval.id);
+      if (overlap >= maxRows) continue;
+      const s = sliceOf(v);
+      if (sliceCounts[s] >= perSlice) continue;
+      rendered.add(v.interval.id);
+      sliceCounts[s]++;
     }
+
+    onScreenCache.set(
+      id,
+      new Set(visible.map((v) => v.interval.id)),
+    );
     renderedCache.set(id, rendered);
 
     for (const v of sorted) {
