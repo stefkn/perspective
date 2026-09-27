@@ -97,12 +97,16 @@ const DASH_EXTENSION = new PathStyleExtension({ dash: true });
 const INTERVAL_BAND: LaneBand = { center: 0, half: 0 };
 
 // Progressive disclosure: a lane renders individual (named) bands and collapses
-// the remaining visible intervals into a single "~n+ more" block. Bands are
-// admitted when they scroll into view and the lane still has room for them
-// (see buildIntervalBands); this is only the absolute ceiling on how many
-// names are on screen at once, so titles cannot overwrite each other in views
-// that pack hundreds of bands.
+// the rest into a single "~n+ more" block. Intervals too thin for the lane's
+// width always collapse, and a band only joins the named set when the lane has
+// room for it (see buildIntervalBands). This floors how many bands get a name
+// at once — titles are wider than their bands, so unbounded naming would
+// overwrite names with names. The real budget scales with the lane's row
+// capacity (wider lane, more rows, more names), so widening a lane raises
+// what it can show. Both are applied at admission only: a band already on
+// screen is never evicted to make room for a newcomer.
 const BUDGET_BANDS = 40;
+const NAMED_PER_ROW = 4;
 // How many collapsed titles the "~n+ more" block carries for its hover tooltip.
 const MORE_NAMES_HINT = 3;
 
@@ -631,10 +635,11 @@ export function buildIntervalBands<T extends Interval = Interval>(
   // a neighbour scrolls off, in significance order. Pinned intervals skip
   // both gates; the always-on period band (half = 0) is unbounded and never
   // collapses (its sub-pixel spans are dropped rather than summarized). The
-  // named set is also capped at BUDGET_BANDS so titles cannot overwrite each
-  // other in views that pack hundreds of bands.
+  // named set is also capped so titles cannot overwrite each other in views
+  // that pack hundreds of bands; the cap grows with the lane's row capacity.
   const collapsible = band.half > 0;
   const maxRows = collapsible ? rowsThatFit(band.half, thickness) : Infinity;
+  const maxNamed = Math.max(BUDGET_BANDS, maxRows * NAMED_PER_ROW);
   const isReadable = (v: (typeof visible)[number]) =>
     (v.c1 - v.c0) * timeScale >= MIN_BAND_LABEL_PX;
 
@@ -675,7 +680,7 @@ export function buildIntervalBands<T extends Interval = Interval>(
         !rendered.has(v.interval.id),
     );
     for (const v of candidates) {
-      if (rendered.size + pinnedVisible.length >= BUDGET_BANDS) break;
+      if (rendered.size + pinnedVisible.length >= maxNamed) break;
       let overlap = 0;
       for (const rid of rendered) {
         const other = byId.get(rid);

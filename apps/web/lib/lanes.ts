@@ -181,8 +181,9 @@ export interface LaneConfig {
 }
 
 // Continuous perpendicular-size range, in px of half-width. The lower bound is
-// just enough to stay legible; the upper bound matches the individual-band
-// budget cap (BUDGET_BANDS rows × ~8px).
+// just enough to stay legible; the upper bound is where the lane's row
+// capacity reaches 40 rows (2 × half / 16px pitch), which the per-lane naming
+// budget scales from.
 export const LANE_HALF_MIN = 40;
 export const LANE_HALF_MAX = 320;
 
