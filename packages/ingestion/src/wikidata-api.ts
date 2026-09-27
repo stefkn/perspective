@@ -149,10 +149,21 @@ export async function fetchEntityDates(
     }
     if (degraded.length) {
       console.error(`  retrying ${degraded.length} degraded entities...`);
+      let stillDegraded = 0;
       for (const batch of chunk(degraded, 20)) {
         for (const d of await fetchBatch(batch)) {
+          // The docstring's contract: degraded rows (missing entity or zero
+          // sitelinks on a vital article) stay out of the cache so a later
+          // run retries them instead of freezing the bad fetch forever.
+          if (d.sitelinks === 0) {
+            stillDegraded++;
+            continue;
+          }
           result.set(d.qid, d);
         }
+      }
+      if (stillDegraded) {
+        console.error(`  ${stillDegraded} entities still degraded; left uncached`);
       }
     }
     await cacheSet(ENTITIES_CACHE, Object.fromEntries(result));
