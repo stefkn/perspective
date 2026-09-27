@@ -123,11 +123,12 @@ function loadLaneState(): {
           perpScale?: number;
         };
         if (typeof entry.visible === "boolean") configs[id].visible = entry.visible;
+        // Snap stored half-widths onto the slider's 5px step so preset buttons
+        // (55/90/160) always sit on-step and drags don't jump off a stored value.
+        const snapToStep = (v: number) =>
+          Math.min(Math.max(Math.round(v / 5) * 5, LANE_HALF_MIN), LANE_HALF_MAX);
         if (typeof entry.half === "number") {
-          configs[id].half = Math.min(
-            Math.max(entry.half, LANE_HALF_MIN),
-            LANE_HALF_MAX,
-          );
+          configs[id].half = snapToStep(entry.half);
         } else if (
           entry.size === "compact" ||
           entry.size === "normal" ||
@@ -135,10 +136,7 @@ function loadLaneState(): {
         ) {
           // Migrate the old size + perpScale pair into a single half-width.
           const scale = typeof entry.perpScale === "number" ? entry.perpScale : 1;
-          configs[id].half = Math.min(
-            Math.max(LANE_SIZE_HALF[entry.size] * scale, LANE_HALF_MIN),
-            LANE_HALF_MAX,
-          );
+          configs[id].half = snapToStep(LANE_SIZE_HALF[entry.size] * scale);
         }
       }
     }

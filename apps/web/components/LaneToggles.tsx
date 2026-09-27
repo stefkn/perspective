@@ -227,7 +227,7 @@ export default function LaneToggles({
                     className="lane-row-size-slider"
                     min={LANE_HALF_MIN}
                     max={LANE_HALF_MAX}
-                    step={4}
+                    step={5}
                     value={cfg.half}
                     aria-label={`${lane.title} size`}
                     onChange={(e) => onSetHalf(item, Number(e.target.value))}
