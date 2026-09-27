@@ -50,7 +50,9 @@ export async function fetchVitalArticles(page: string): Promise<VitalEntry[]> {
     const line = raw.trim();
     const header = line.match(/^(={2,6})(.*?)\1\s*$/);
     if (header) {
-      if (header[1].length === 3) topic = header[2].trim();
+      // Level 2 and 3 headings both group entries into topics; deeper headings
+      // are sub-splits of the current topic and must not reset it.
+      if (header[1].length <= 3) topic = header[2].trim();
       continue;
     }
     if (!/^#/.test(line)) continue;
