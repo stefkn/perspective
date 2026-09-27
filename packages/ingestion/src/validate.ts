@@ -33,6 +33,8 @@ const KNOWN: Record<EntityType, Known[]> = {
     { label: "Cleopatra", end: -30 },
     { label: "Socrates", start: -470, estimated: true },
     { label: "Hammurabi", estimated: true },
+    // Regression gate: the pipeline once recorded a 1909 death date here.
+    { label: "Vitus Bering", start: 1681, end: 1741 },
   ],
   state: [
     { label: "Roman Empire", start: -27, end: 476 },

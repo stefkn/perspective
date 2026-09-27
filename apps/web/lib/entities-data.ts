@@ -6789,7 +6789,7 @@ export const PEOPLE: Interval[] = [
     "id": "Q127641",
     "title": "Vitus Bering",
     "startYear": 1681,
-    "endYear": 1909,
+    "endYear": 1741,
     "estimated": false,
     "description": "Vitus Bering led Russian expeditions exploring the northeastern coast of Asia and North America.",
     "significance": 0.44812524678349513,
