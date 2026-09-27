@@ -74,7 +74,7 @@ async function main() {
   for (const c of candidates) {
     if (c.start && c.end && c.start.year > c.end.year) badOrder++;
     for (const t of [c.start, c.end]) {
-      if (t && (t.year < -10000 || t.year > 2026)) outOfRange++;
+      if (t && (t.year < -10000 || t.year > new Date().getFullYear() + 1)) outOfRange++;
     }
   }
   const withEnd = candidates.filter((c) => c.end).length;
@@ -94,7 +94,13 @@ async function main() {
   if (known.length) {
     console.log("\nknown entities:");
     for (const k of known) {
-      const c = candidates.find((x) => x.label.toLowerCase().includes(k.label.toLowerCase()));
+      // Exact title match: a substring find would validate the wrong entity
+      // ("Roman Empire" matching "Holy Roman Empire" depending on order).
+      const c = candidates.find(
+        (x) =>
+          x.label.toLowerCase() === k.label.toLowerCase() ||
+          x.wikipediaTitle.toLowerCase() === k.label.toLowerCase(),
+      );
       if (!c) {
         console.log(`  ${k.label}: NOT FOUND`);
         continue;
