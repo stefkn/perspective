@@ -158,10 +158,20 @@ export async function fetchPageSignals(titles: string[]): Promise<Map<string, Pa
     }
     if (retry.length) {
       console.error(`  retrying ${retry.length} titles with missing pageviews...`);
+      let stillMissing = 0;
       for (const batch of chunk(retry, 10)) {
         for (const p of await fetchSignalsBatch(batch)) {
-          result.set(p.title, { length: p.length, pageviews: p.pageviews ?? 0 });
+          // Only cache rows that actually got pageviews this time; persisting
+          // a null as 0 would freeze the flaky read in the cache forever.
+          if (p.pageviews === null) {
+            stillMissing++;
+            continue;
+          }
+          result.set(p.title, { length: p.length, pageviews: p.pageviews });
         }
+      }
+      if (stillMissing) {
+        console.error(`  ${stillMissing} titles still have no pageviews; left uncached`);
       }
     }
     await cacheSet(PAGE_SIGNALS_CACHE, Object.fromEntries(result));
