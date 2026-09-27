@@ -247,9 +247,14 @@ const SMOOTH_FACTOR = 0.3;
 
 // Remembers each label's current smoothed offset (in screen px) so it sticks
 // to its slot and glides toward a new one instead of flickering between
-// equally valid positions. Keyed by stable label id; the small set keeps this
-// bounded.
+// equally valid positions. Keyed by stable label id; entries the label hasn't
+// touched in a while (scrolled away, zoomed out of the named set) are pruned
+// so the map stays bounded.
 const labelOffsetCache = new Map<string, [number, number]>();
+const labelLastSeen = new Map<string, number>();
+let labelFrame = 0;
+const LABEL_CACHE_TTL_FRAMES = 600;
+const LABEL_CACHE_MAX = 4096;
 
 // Candidate (time-px, perp-px) offsets ordered by distance from the home slot,
 // so labels first try to sit still, then nudge along either axis, then both.
@@ -372,6 +377,20 @@ function staggerIntervalLabels(
   const result = labels.map((l) => ({ coord: l.coord, perp: l.perp }));
   if (labels.length === 0) return result;
 
+  labelFrame++;
+  if (
+    labelOffsetCache.size > LABEL_CACHE_MAX ||
+    labelFrame % 300 === 0
+  ) {
+    for (const id of labelOffsetCache.keys()) {
+      const seen = labelLastSeen.get(id) ?? 0;
+      if (labelFrame - seen > LABEL_CACHE_TTL_FRAMES) {
+        labelOffsetCache.delete(id);
+        labelLastSeen.delete(id);
+      }
+    }
+  }
+
   const order = labels
     .map((l, i) => ({ i, t: l.coord }))
     .sort((a, b) => a.t - b.t);
@@ -427,6 +446,7 @@ function staggerIntervalLabels(
       perp: label.perp + next[1],
     };
     labelOffsetCache.set(label.id, next);
+    labelLastSeen.set(label.id, labelFrame);
   }
 
   return result;
