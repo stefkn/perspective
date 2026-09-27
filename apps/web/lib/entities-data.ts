@@ -519,7 +519,7 @@ export const PEOPLE: Interval[] = [
     "id": "Q1334304",
     "title": "Izumo no Okuni",
     "startYear": 1572,
-    "endYear": 2026,
+    "endYear": 1572.082135523614,
     "estimated": false,
     "description": "Izumo no Okuni pioneered kabuki theatre, transforming Japanese performing arts with her all-female troupe.",
     "significance": 0.2881929236083627,
@@ -1420,7 +1420,7 @@ export const PEOPLE: Interval[] = [
     "title": "Phidias",
     "startYear": -490,
     "endYear": -430,
-    "estimated": false,
+    "estimated": true,
     "description": "Ancient Greek sculptor renowned for the Statue of Zeus and Athena statues.",
     "significance": 0.39380423715290996,
     "wikipediaUrl": "https://en.wikipedia.org/wiki/Phidias"
@@ -1560,7 +1560,7 @@ export const PEOPLE: Interval[] = [
     "title": "Andrea Palladio",
     "startYear": 1508,
     "endYear": 1580,
-    "estimated": false,
+    "estimated": true,
     "description": "Andrea Palladio's architectural designs greatly influenced Western architecture, particularly in villa construction.",
     "significance": 0.47250301930130006,
     "wikipediaUrl": "https://en.wikipedia.org/wiki/Andrea_Palladio"
@@ -2060,7 +2060,7 @@ export const PEOPLE: Interval[] = [
     "title": "Lucian",
     "startYear": 120,
     "endYear": 180,
-    "estimated": false,
+    "estimated": true,
     "description": "Lucian of Samosata was a satirist known for ridiculing philosophical and religious beliefs.",
     "significance": 0.5342563494816901,
     "wikipediaUrl": "https://en.wikipedia.org/wiki/Lucian"
@@ -2190,7 +2190,7 @@ export const PEOPLE: Interval[] = [
     "title": "Ferdowsi",
     "startYear": 940,
     "endYear": 1020,
-    "estimated": false,
+    "estimated": true,
     "description": "Ferdowsi authored the Shahnameh, one of the longest epic poems in Persian literature.",
     "significance": 0.5612765695845677,
     "wikipediaUrl": "https://en.wikipedia.org/wiki/Ferdowsi"
@@ -2310,7 +2310,7 @@ export const PEOPLE: Interval[] = [
     "title": "Christine de Pizan",
     "startYear": 1364,
     "endYear": 1430,
-    "estimated": false,
+    "estimated": true,
     "description": "Christine de Pizan advocated for women's rights through her literary works in medieval France.",
     "significance": 0.4560924673527691,
     "wikipediaUrl": "https://en.wikipedia.org/wiki/Christine_de_Pizan"
@@ -6670,7 +6670,7 @@ export const PEOPLE: Interval[] = [
     "title": "Ibn Battuta",
     "startYear": 1304,
     "endYear": 1368,
-    "estimated": false,
+    "estimated": true,
     "description": "Ibn Battuta traveled extensively across Africa and Asia, chronicling his journeys in The Rihla.",
     "significance": 0.6420924027170805,
     "wikipediaUrl": "https://en.wikipedia.org/wiki/Ibn_Battuta"
@@ -6720,7 +6720,7 @@ export const PEOPLE: Interval[] = [
     "title": "Pedro Álvares Cabral",
     "startYear": 1467,
     "endYear": 1520,
-    "estimated": false,
+    "estimated": true,
     "description": "Pedro Álvares Cabral discovered Brazil and explored four continents during his famous voyage.",
     "significance": 0.4811047988770595,
     "wikipediaUrl": "https://en.wikipedia.org/wiki/Pedro_%C3%81lvares_Cabral"
@@ -6950,7 +6950,7 @@ export const PEOPLE: Interval[] = [
     "title": "Laozi",
     "startYear": -604,
     "endYear": -500,
-    "estimated": false,
+    "estimated": true,
     "description": "Laozi is traditionally regarded as the author of the foundational Taoist text Tao Te Ching.",
     "significance": 0.6173259859290994,
     "wikipediaUrl": "https://en.wikipedia.org/wiki/Laozi"
@@ -8620,7 +8620,7 @@ export const PEOPLE: Interval[] = [
     "title": "Saint Peter",
     "startYear": -1,
     "endYear": 65,
-    "estimated": false,
+    "estimated": true,
     "description": "Saint Peter, one of Jesus's apostles, became a foundational leader in early Christianity.",
     "significance": 0.6869497592815841,
     "wikipediaUrl": "https://en.wikipedia.org/wiki/Saint_Peter"
@@ -8700,7 +8700,7 @@ export const PEOPLE: Interval[] = [
     "title": "Saint George",
     "startYear": 275,
     "endYear": 303,
-    "estimated": false,
+    "estimated": true,
     "description": "Saint George, an early Christian martyr, became a symbol of bravery and faith.",
     "significance": 0.5835394826477489,
     "wikipediaUrl": "https://en.wikipedia.org/wiki/Saint_George"
@@ -9339,7 +9339,7 @@ export const PEOPLE: Interval[] = [
     "id": "Q574355",
     "title": "Kapila",
     "startYear": -550,
-    "endYear": 2026,
+    "endYear": -549.9178644763861,
     "estimated": true,
     "description": "Kapila founded the Samkhya school of Hindu philosophy, influencing Buddhist thought and practice.",
     "significance": 0.3789429700910081,
@@ -9349,7 +9349,7 @@ export const PEOPLE: Interval[] = [
     "id": "Q1771062",
     "title": "Gaudapada",
     "startYear": 550,
-    "endYear": 2026,
+    "endYear": 550.0821355236139,
     "estimated": true,
     "description": "Gaudapada contributed significantly to Advaita Vedanta through his work, the Māṇḍūkya Kārikā.",
     "significance": 0.32553010443852903,
@@ -9700,7 +9700,7 @@ export const PEOPLE: Interval[] = [
     "title": "Thutmose III",
     "startYear": -1481,
     "endYear": -1425,
-    "estimated": false,
+    "estimated": true,
     "description": "Thutmose III expanded Egypt's empire through military conquests, establishing it as a dominant power.",
     "significance": 0.5042281643923368,
     "wikipediaUrl": "https://en.wikipedia.org/wiki/Thutmose_III"
@@ -11210,7 +11210,7 @@ export const PEOPLE: Interval[] = [
     "title": "Alfred the Great",
     "startYear": 849,
     "endYear": 899,
-    "estimated": false,
+    "estimated": true,
     "description": "Alfred the Great implemented significant reforms, shaping the future of Anglo-Saxon England.",
     "significance": 0.632462601060468,
     "wikipediaUrl": "https://en.wikipedia.org/wiki/Alfred_the_Great"
@@ -15620,7 +15620,7 @@ export const PEOPLE: Interval[] = [
     "title": "Archimedes",
     "startYear": -287,
     "endYear": -212,
-    "estimated": false,
+    "estimated": true,
     "description": "Archimedes made significant advancements in mathematics and physics during classical antiquity.",
     "significance": 0.6750102432776314,
     "wikipediaUrl": "https://en.wikipedia.org/wiki/Archimedes"
@@ -15710,7 +15710,7 @@ export const PEOPLE: Interval[] = [
     "title": "Galen",
     "startYear": 129,
     "endYear": 300,
-    "estimated": false,
+    "estimated": true,
     "description": "Roman physician and philosopher whose research significantly advanced multiple medical disciplines.",
     "significance": 0.5862806185185234,
     "wikipediaUrl": "https://en.wikipedia.org/wiki/Galen"
@@ -24736,7 +24736,7 @@ export const CULTURE: Interval[] = [
     "title": "The Magic Flute",
     "startYear": 1791,
     "endYear": 1800,
-    "estimated": false,
+    "estimated": true,
     "description": "Mozart's last opera, premiered in 1791, combining singing and spoken dialogue.",
     "significance": 0.49308586559023054,
     "wikipediaUrl": "https://en.wikipedia.org/wiki/The_Magic_Flute"
@@ -24766,7 +24766,7 @@ export const CULTURE: Interval[] = [
     "title": "La traviata",
     "startYear": 1852,
     "endYear": 1900,
-    "estimated": false,
+    "estimated": true,
     "description": "La traviata is an opera by Verdi based on Dumas's play about love and sacrifice.",
     "significance": 0.46350485401656694,
     "wikipediaUrl": "https://en.wikipedia.org/wiki/La_traviata"
@@ -25689,7 +25689,7 @@ export const WARS: Interval[] = [
     "title": "Arab–Byzantine wars",
     "startYear": 629,
     "endYear": 1050,
-    "estimated": false,
+    "estimated": true,
     "description": "The Arab–Byzantine wars involved conflicts between Islamic caliphates and the Byzantine Empire over centuries.",
     "significance": 0.44910339822515727,
     "wikipediaUrl": "https://en.wikipedia.org/wiki/Arab%E2%80%93Byzantine_wars"
@@ -26552,7 +26552,7 @@ export const PERIODS: Interval[] = [
     "title": "Iron Age",
     "startYear": -1200,
     "endYear": -550,
-    "estimated": false,
+    "estimated": true,
     "description": "The Iron Age follows the Bronze Age, marking advancements in technology and societal organization.",
     "significance": 0.6339409886238057,
     "wikipediaUrl": "https://en.wikipedia.org/wiki/Iron_Age"
@@ -26562,7 +26562,7 @@ export const PERIODS: Interval[] = [
     "title": "Classical antiquity",
     "startYear": -1199,
     "endYear": 500,
-    "estimated": false,
+    "estimated": true,
     "description": "Classical antiquity encompasses the cultural history of ancient Greece and Rome from the 8th century BC.",
     "significance": 0.5343434077462407,
     "wikipediaUrl": "https://en.wikipedia.org/wiki/Classical_antiquity"
@@ -26602,7 +26602,7 @@ export const PERIODS: Interval[] = [
     "title": "Minoan civilization",
     "startYear": -3000,
     "endYear": -1100,
-    "estimated": false,
+    "estimated": true,
     "description": "Bronze Age culture centered on Crete, known for monumental architecture and extensive trade.",
     "significance": 0.5927505970682778,
     "wikipediaUrl": "https://en.wikipedia.org/wiki/Minoan_civilization"
@@ -26762,7 +26762,7 @@ export const PERIODS: Interval[] = [
     "title": "Great Depression",
     "startYear": 1929,
     "endYear": 1941,
-    "estimated": false,
+    "estimated": true,
     "description": "Severe global economic downturn from 1929 to 1939 marked by high unemployment and poverty.",
     "significance": 0.6769775895399056,
     "wikipediaUrl": "https://en.wikipedia.org/wiki/Great_Depression"
