@@ -49,6 +49,15 @@ export function laneOffset(lane: number, thickness: number): number {
   return direction * (thickness / 2 + 6 + level * 16);
 }
 
+// How many sub-lane rows fit inside a band of the given half-width: the
+// leading rows whose outer edge, as positioned by laneOffset, stays within
+// the band's half-width.
+export function rowsThatFit(half: number, thickness: number): number {
+  let rows = 0;
+  while (Math.abs(laneOffset(rows, thickness)) + thickness / 2 <= half) rows++;
+  return rows;
+}
+
 export interface LaneBand {
   center: number;
   half: number;

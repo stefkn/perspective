@@ -12,6 +12,7 @@ import {
   assignIntervalLanes,
   fractionToPerp,
   laneOffset,
+  rowsThatFit,
   valueToFraction,
   type AssignedInterval,
   type Interval,
@@ -96,11 +97,11 @@ const DASH_EXTENSION = new PathStyleExtension({ dash: true });
 const INTERVAL_BAND: LaneBand = { center: 0, half: 0 };
 
 // Progressive disclosure: a lane renders individual (named) bands and collapses
-// the remaining visible intervals into a single "~n+ more" block. Order of
-// significance decides which intervals stay individual, and intervals too thin
-// to read always collapse regardless of significance. The number of kept bands
-// is also bounded by how many fit in the lane's perpendicular half (see below),
-// so this is only the absolute ceiling.
+// the remaining visible intervals into a single "~n+ more" block. Bands are
+// admitted when they scroll into view and the lane still has room for them
+// (see buildIntervalBands); this is only the absolute ceiling on how many
+// names are on screen at once, so titles cannot overwrite each other in views
+// that pack hundreds of bands.
 const BUDGET_BANDS = 40;
 // How many collapsed titles the "~n+ more" block carries for its hover tooltip.
 const MORE_NAMES_HINT = 3;
@@ -466,6 +467,13 @@ function bandPolygon(
   ];
 }
 
+// Which intervals currently hold a named band, per lane id. A band that gets
+// a name keeps it for as long as it stays on screen — visibility must never
+// decide whether a band is named, or bands would pop in and out while on
+// screen as the viewport slides. Memory drops a band only when it scrolls out
+// of view or zooming makes it too thin to read.
+const renderedCache = new Map<string, Set<string>>();
+
 // Sticky sub-lane placement, keyed by lane id. Re-packing the visible subset
 // from scratch on every frame reshuffled swimlane rows whenever an entity
 // entered or left the viewport, so bands jumped around their neighbours while
@@ -606,18 +614,29 @@ export function buildIntervalBands<T extends Interval = Interval>(
     visible.push({ interval, c0, c1 });
   }
 
-  // Progressive disclosure: keep the most significant intervals that are wide
-  // enough to read as individual bands; collapse the rest into one "~n+ more"
-  // block. The budget is bounded by how many stacked sub-lanes actually fit
-  // inside the lane's perpendicular half, so the kept bands don't spill off
-  // screen. Pinned intervals are exempt from both the budget and the
-  // readability gate: they stay individual however thin or crowded the lane
-  // gets. The always-on period band (half = 0) is unbounded and never
-  // collapses (its sub-pixel spans are just dropped rather than summarized).
+  // Progressive disclosure: every named band needs a sub-lane row of its own
+  // and only maxRows rows fit inside the lane, so the visible set splits into
+  // named bands and one "~n+ more" block for the rest.
+  //
+  // A band joins the named set when it scrolls into view and fewer than
+  // maxRows named bands already overlap it: overlaps are what force bands
+  // into separate rows, so admitting one can never overflow the lane — no
+  // matter how the arrivals were ordered, the last band admitted has seen all
+  // of its overlapping neighbours already on screen. Once named it stays
+  // named while on screen. That is the whole point: an entity's place on
+  // screen must not depend on what else happens to be in the viewport, or it
+  // pops in and out as the view slides (the old top-N budget picked winners
+  // globally, so bands appeared mid-viewport only after neighbours scrolled
+  // away). Blocked candidates are retried every frame and admitted as soon as
+  // a neighbour scrolls off, in significance order. Pinned intervals skip
+  // both gates; the always-on period band (half = 0) is unbounded and never
+  // collapses (its sub-pixel spans are dropped rather than summarized). The
+  // named set is also capped at BUDGET_BANDS so titles cannot overwrite each
+  // other in views that pack hundreds of bands.
   const collapsible = band.half > 0;
-  const budget = collapsible
-    ? Math.min(BUDGET_BANDS, Math.max(2, Math.floor(band.half / 8)))
-    : Infinity;
+  const maxRows = collapsible ? rowsThatFit(band.half, thickness) : Infinity;
+  const isReadable = (v: (typeof visible)[number]) =>
+    (v.c1 - v.c0) * timeScale >= MIN_BAND_LABEL_PX;
 
   const sorted = [...visible].sort((a, b) => {
     const aPinned = pinned.has(a.interval.id);
@@ -625,23 +644,72 @@ export function buildIntervalBands<T extends Interval = Interval>(
     if (aPinned !== bPinned) return aPinned ? -1 : 1;
     return (b.interval.significance ?? 0) - (a.interval.significance ?? 0);
   });
-  const individual: typeof visible = [];
+
+  let individual: typeof visible = [];
   const collapsed: typeof visible = [];
-  for (const v of sorted) {
-    if (pinned.has(v.interval.id)) {
-      individual.push(v);
-      continue;
+  if (!collapsible) {
+    individual = sorted.filter(
+      (v) => pinned.has(v.interval.id) || isReadable(v),
+    );
+  } else {
+    const rendered = renderedCache.get(id) ?? new Set<string>();
+    const byId = new Map(visible.map((v) => [v.interval.id, v]));
+    // Forget bands that scrolled out of view or became too thin to read;
+    // both come from the view changing, which is allowed to reset a band.
+    for (const rid of [...rendered]) {
+      const v = byId.get(rid);
+      if (!v || !isReadable(v)) rendered.delete(rid);
     }
-    const readable = (v.c1 - v.c0) * timeScale >= MIN_BAND_LABEL_PX;
-    if (readable && individual.length < budget) individual.push(v);
-    else if (collapsible) collapsed.push(v);
+    const pinnedVisible = sorted.filter((v) => pinned.has(v.interval.id));
+    const overlaps = (
+      a: (typeof visible)[number],
+      b: (typeof visible)[number],
+    ) =>
+      a.interval.startYear < b.interval.endYear &&
+      b.interval.startYear < a.interval.endYear;
+
+    const candidates = sorted.filter(
+      (v) =>
+        !pinned.has(v.interval.id) &&
+        isReadable(v) &&
+        !rendered.has(v.interval.id),
+    );
+    for (const v of candidates) {
+      if (rendered.size + pinnedVisible.length >= BUDGET_BANDS) break;
+      let overlap = 0;
+      for (const rid of rendered) {
+        const other = byId.get(rid);
+        if (other && overlaps(other, v)) {
+          overlap++;
+          if (overlap >= maxRows) break;
+        }
+      }
+      if (overlap < maxRows) {
+        for (const p of pinnedVisible) {
+          if (overlaps(p, v)) {
+            overlap++;
+            if (overlap >= maxRows) break;
+          }
+        }
+      }
+      if (overlap < maxRows) rendered.add(v.interval.id);
+    }
+    renderedCache.set(id, rendered);
+
+    for (const v of sorted) {
+      if (pinned.has(v.interval.id) || rendered.has(v.interval.id)) {
+        individual.push(v);
+      } else {
+        collapsed.push(v);
+      }
+    }
   }
 
   const laneById = placeIntervalLanes(
     id,
     visible.map((v) => v.interval),
     individual.map((v) => v.interval),
-    Infinity,
+    collapsible ? maxRows - 1 : Infinity,
   );
 
   // Individual bands (full color, stacked into sub-lanes).
