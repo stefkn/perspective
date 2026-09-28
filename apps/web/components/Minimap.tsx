@@ -138,8 +138,9 @@ export default function Minimap({
       layers={layers}
       viewState={viewState}
       controller={false}
-      // Keep minimap taps responsive for the same reasons as the main view
-      // (see TAP_RECOGNIZER_OPTIONS in Timeline.tsx).
+      // Keep minimap taps responsive and tolerant of near-misses for the same
+      // reasons as the main view (see Timeline.tsx).
+      pickingRadius={12}
       eventRecognizerOptions={TAP_RECOGNIZER_OPTIONS}
       width={size.width}
       height={size.height}

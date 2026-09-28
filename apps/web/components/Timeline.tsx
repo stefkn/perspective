@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import DeckGL from "@deck.gl/react";
 import { OrthographicView, type DeckProps } from "@deck.gl/core";
 import {
@@ -56,9 +56,9 @@ const ON_THIS_DAY_DOT_MARGIN = 48;
 
 const LABEL_ANGLE_DEG = 45;
 
-// Tap recognizer overrides (see the DeckGL props for why). The `enable: false`
-// on dblclick is honored at runtime but omitted from deck's options type, so
-// the object is typed loosely.
+// Tap recognizer overrides (see the DeckGL props and the deckRef effect for
+// why). The dblclick entry is belt-and-braces: deck 9.3 currently ignores the
+// `enable` flag, so the ref effect disables the recognizer at runtime.
 export const TAP_RECOGNIZER_OPTIONS = {
   dblclick: { enable: false },
   click: { time: 1000 },
@@ -293,6 +293,24 @@ export default function Timeline({
       window.matchMedia("(hover: none)").matches,
   );
   const [hoveredId, setHoveredId] = useState<string | null>(null);
+
+  // The default tap recognizer queues every click ~300ms behind a possible
+  // double-click and cancels a pending click when the user taps again within
+  // that window, so rapid tapping never selects (this view has double-click
+  // zoom disabled anyway). Disabling the dblclick recognizer via deck's
+  // `eventRecognizerOptions` does not stick (its `enable` flag is not applied
+  // to the constructed recognizer in deck 9.3), so patch it once the deck
+  // instance exists, using the recognizer's own public `set()` API. With the
+  // recognizer disabled, clicks emit immediately on pointer-up and nothing
+  // cancels them.
+  const deckRef = useRef<any>(null);
+  useEffect(() => {
+    const em = deckRef.current?.deck?.eventManager;
+    const dbl = em?.manager?.recognizers?.find(
+      (r: any) => r?.options?.event === "dblclick",
+    );
+    dbl?.set({ enable: false });
+  }, []);
 
   // On touch, default the focus to the on-this-day dot nearest the viewport
   // center so there is always a tap-target-free way to read a label.
@@ -828,12 +846,14 @@ export default function Timeline({
         maxZoom: 16,
       }}
       controller={true}
-      // Instant taps: the default click recognizer waits ~300ms for a possible
-      // double-click (which this view disables anyway) and cancels a pending
-      // click if the user taps again meanwhile; its 250ms down-up window also
-      // silently discards taps whose pointerup is delayed by the synchronous
-      // pointerdown pick or a layer rebuild. `enable: false` is honored by the
-      // recognizer at runtime but omitted from deck's options type.
+      ref={deckRef}
+      // Widen the tap search so a tap landing in the gap between two labels
+      // (or slightly off a glyph) still picks the nearest label instead of
+      // registering as a click on empty space and closing the info box.
+      pickingRadius={12}
+      // Widens the down-up tap window: the synchronous pointerdown pick or a
+      // layer rebuild can delay the pointerup past the recognizer's default
+      // 250ms window, silently discarding genuine taps.
       eventRecognizerOptions={TAP_RECOGNIZER_OPTIONS}
       onViewStateChange={({ viewState: vs }) => {
         const t = vs.target ?? [0, 0, 0];
