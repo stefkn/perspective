@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import DeckGL from "@deck.gl/react";
-import { OrthographicView } from "@deck.gl/core";
+import { OrthographicView, type DeckProps } from "@deck.gl/core";
 import {
   LineLayer,
   ScatterplotLayer,
@@ -55,6 +55,14 @@ const ON_THIS_DAY_LABEL_EDGE_MARGIN = 120;
 const ON_THIS_DAY_DOT_MARGIN = 48;
 
 const LABEL_ANGLE_DEG = 45;
+
+// Tap recognizer overrides (see the DeckGL props for why). The `enable: false`
+// on dblclick is honored at runtime but omitted from deck's options type, so
+// the object is typed loosely.
+export const TAP_RECOGNIZER_OPTIONS = {
+  dblclick: { enable: false },
+  click: { time: 1000 },
+} as unknown as NonNullable<DeckProps["eventRecognizerOptions"]>;
 
 // Cap the number of on-this-day labels shown at once: at century-level zooms
 // the visible range holds thousands of events, so a dense label cloud is
@@ -820,6 +828,13 @@ export default function Timeline({
         maxZoom: 16,
       }}
       controller={true}
+      // Instant taps: the default click recognizer waits ~300ms for a possible
+      // double-click (which this view disables anyway) and cancels a pending
+      // click if the user taps again meanwhile; its 250ms down-up window also
+      // silently discards taps whose pointerup is delayed by the synchronous
+      // pointerdown pick or a layer rebuild. `enable: false` is honored by the
+      // recognizer at runtime but omitted from deck's options type.
+      eventRecognizerOptions={TAP_RECOGNIZER_OPTIONS}
       onViewStateChange={({ viewState: vs }) => {
         const t = vs.target ?? [0, 0, 0];
         onViewStateChange({
