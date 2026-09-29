@@ -42,11 +42,53 @@ export function assignIntervalLanes<T extends Interval>(
   return result;
 }
 
-// Perpendicular offset of a sub-lane relative to its parent band's center.
+// Perpendicular offset of a sub-lane row relative to a band's center. Rows
+// alternate to either side of the center. Interval lanes don't lay out this
+// way anymore (see intervalRowPerp); it remains for the period band, which is
+// a zero-height band sitting on the axis itself.
 export function laneOffset(lane: number, thickness: number): number {
   const direction = lane % 2 === 0 ? -1 : 1;
   const level = Math.floor(lane / 2);
   return direction * (thickness / 2 + 6 + level * 16);
+}
+
+// Perpendicular center of a sub-lane row inside a band. Rows fill from the
+// band's inner edge (the side nearest the main axis) outward, so the first
+// rows hug the timeline and widening the lane appends rows beyond the
+// existing ones instead of shifting them all further away. The period band
+// (half = 0) has no inner edge to anchor to and keeps alternating around the
+// axis instead.
+export function intervalRowPerp(
+  row: number,
+  band: LaneBand,
+  thickness: number,
+): number {
+  if (band.half <= 0) return band.center + laneOffset(row, thickness);
+  const side = band.center >= 0 ? 1 : -1;
+  const inner = band.center - side * band.half;
+  return inner + side * (thickness / 2 + 6 + row * 16);
+}
+
+// How many sub-lane rows fit inside a band of the given half-width: rows
+// filled from the inner edge outward, stopping short of the outer edge where
+// the "~n+ more" strip (centered on that edge) needs its slice of the band.
+export function rowsThatFit(half: number, thickness: number): number {
+  let rows = 0;
+  while (rows < 512 && thickness + 6 + rows * 16 <= 2 * half - thickness / 2) {
+    rows++;
+  }
+  return Math.max(rows, 1);
+}
+
+// How wide (along time, in px) a band must be to render at a given lane
+// half-width instead of collapsing into the "~n+ more" strip. Narrow lanes
+// keep a strict readability cutoff (sub-legible specks belong in the strip);
+// wide lanes let near-sub-pixel slivers render directly — the room is there,
+// and widening a lane is exactly how you ask to see more of it. Labels stay
+// gated on the fixed 6px floor regardless (see MIN_BAND_LABEL_PX), so slivers
+// render as bare ticks and only become titled once they are legible.
+export function minBandPx(half: number): number {
+  return Math.max(1, Math.min(6, 240 / half));
 }
 
 export interface LaneBand {
@@ -150,8 +192,9 @@ export interface LaneConfig {
 }
 
 // Continuous perpendicular-size range, in px of half-width. The lower bound is
-// just enough to stay legible; the upper bound matches the individual-band
-// budget cap (BUDGET_BANDS rows × ~8px).
+// just enough to stay legible; the upper bound is where the lane's row
+// capacity reaches 40 rows (2 × half / 16px pitch), which the per-lane naming
+// budget scales from.
 export const LANE_HALF_MIN = 40;
 export const LANE_HALF_MAX = 320;
 

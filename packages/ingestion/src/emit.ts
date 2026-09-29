@@ -18,10 +18,14 @@ const OUT_PATH = resolve(__dirname, "..", "..", "..", "apps", "web", "lib", "ent
 const NOW = new Date().getFullYear();
 const FLOOR = -3000; // v1 timeline floor (3000 BCE)
 const PERIOD_MIN_SIG = 0.5; // keep the always-on periods band focused
-// Minimum rendered span for "instantaneous" entities (e.g. a work dated to a
-// single year), so their band has a visible width and can be zoomed into and
+// Minimum rendered span for "instantaneous" entities (e.g. a person dated to
+// a single year), so their band has a visible width and can be zoomed into and
 // labelled instead of collapsing to a sub-pixel sliver.
 const MIN_SPAN_YEARS = 30 / 365.25; // ~one month
+// Cultural works span their release year instead: a one-month sliver on a
+// year-long band reads as a rounding artifact, while spanning the year keeps
+// the work legible without pretending it took a month to exist.
+const WORK_MIN_SPAN_YEARS = 1;
 
 const wiki = (title: string) =>
   `https://en.wikipedia.org/wiki/${encodeURIComponent(title.replace(/ /g, "_"))}`;
@@ -41,18 +45,23 @@ function clampInterval(
   return { startYear, endYear };
 }
 
-function toInterval(r: EnrichedCandidate, endFallback: number): Interval | null {
+function toInterval(
+  r: EnrichedCandidate,
+  endFallback: number,
+  minSpanYears: number = MIN_SPAN_YEARS,
+): Interval | null {
   const span = clampInterval(r, endFallback);
   if (!span) return null;
-  if (span.endYear - span.startYear < MIN_SPAN_YEARS) {
-    span.endYear = span.startYear + MIN_SPAN_YEARS;
+  if (span.endYear - span.startYear < minSpanYears) {
+    span.endYear = span.startYear + minSpanYears;
   }
   return {
     id: r.qid,
     title: r.label,
     startYear: span.startYear,
     endYear: span.endYear,
-    estimated: r.start?.estimated ?? false,
+    // Either endpoint being an estimate makes the whole band approximate.
+    estimated: (r.start?.estimated ?? false) || (r.end?.estimated ?? false),
     description: r.description,
     significance: r.significance,
     wikipediaUrl: wiki(r.wikipediaTitle),
@@ -68,9 +77,19 @@ async function main() {
   const event = await readJsonl<EnrichedCandidate>("enriched/event.jsonl");
 
   // Lanes: lifespans, state existence, cultural-work creation windows, wars.
-  const people = person.map((r) => toInterval(r, NOW)).filter((x): x is Interval => !!x);
+  // A person with no recorded end is "still alive" only if they were born
+  // recently; an old start with no end means the death date is simply
+  // missing, so treat it as point-like instead of stretching a lifespan to
+  // the present (the same guard the wars lane applies).
+  const people = person
+    .map((r) =>
+      toInterval(r, r.start && r.start.year < NOW - 120 ? r.start.year : NOW),
+    )
+    .filter((x): x is Interval => !!x);
   const powers = state.map((r) => toInterval(r, NOW)).filter((x): x is Interval => !!x);
-  const culture = work.map((r) => toInterval(r, r.start?.year ?? NOW)).filter((x): x is Interval => !!x);
+  const culture = work
+    .map((r) => toInterval(r, r.start?.year ?? NOW, WORK_MIN_SPAN_YEARS))
+    .filter((x): x is Interval => !!x);
   // A war with no recorded end is "ongoing" only if it began recently; an old
   // start with no end means the end date is simply missing from Wikidata, so
   // treat it as point-like instead of stretching it to the present.

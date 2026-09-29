@@ -20,10 +20,17 @@ const wiki = (title: string) =>
 
 export function loadOnThisDayData(): Promise<OnThisDayData> {
   if (!cachedData) {
-    cachedData = fetch("/on-this-day.json").then((res) => {
-      if (!res.ok) throw new Error(`Failed to load On This Day data: ${res.status}`);
-      return res.json() as Promise<OnThisDayData>;
-    });
+    // A rejected fetch must not stay cached, or every later caller would await
+    // the same failed promise and the dots would never come back this session.
+    cachedData = fetch("/on-this-day.json")
+      .then((res) => {
+        if (!res.ok) throw new Error(`Failed to load On This Day data: ${res.status}`);
+        return res.json() as Promise<OnThisDayData>;
+      })
+      .catch((err) => {
+        cachedData = null;
+        throw err;
+      });
   }
   return cachedData;
 }

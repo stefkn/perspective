@@ -38,6 +38,15 @@ async function main() {
   const requested = process.argv.slice(2) as EntityType[];
   const targets = requested.length ? requested : ALL_TYPES;
 
+  if (targets.length < ALL_TYPES.length) {
+    console.error(
+      `warning: scoring only [${targets.join(", ")}] — logNorm normalizes against ` +
+        `this run's min/max, so these significance values are on a different ` +
+        `scale than previously persisted categories and cannot be mixed with ` +
+        `them by emit (e.g. the PERIOD_MIN_SIG cutoff). Prefer a full run.`,
+    );
+  }
+
   // Load all target categories in a fixed order.
   const candidates: Candidate[] = [];
   for (const t of targets) {

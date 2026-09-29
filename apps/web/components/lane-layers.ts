@@ -11,7 +11,9 @@ import {
 import {
   assignIntervalLanes,
   fractionToPerp,
-  laneOffset,
+  intervalRowPerp,
+  minBandPx,
+  rowsThatFit,
   valueToFraction,
   type AssignedInterval,
   type Interval,
@@ -53,6 +55,18 @@ const SANS = "ui-sans-serif, system-ui, -apple-system, sans-serif";
 
 const LANE_TITLE_COLOR: [number, number, number, number] = [138, 147, 166, 220];
 
+// Accent for pinned entities: the canvas counterpart of the info box pin
+// toggle (CSS --accent-2). Bands get a halo around them, dots a ring, and
+// labels this color, so a pinned entity stands out at any zoom.
+export const PIN_HIGHLIGHT: [number, number, number, number] = [
+  127, 209, 255, 255,
+];
+
+// Accent for the currently selected entity (info box open). White reads as
+// "you are here" against the dark lanes and stays distinct from the pinned
+// accent.
+const SELECTED_COLOR: [number, number, number, number] = [255, 255, 255, 255];
+
 const PERIOD_FILL: [number, number, number, number] = [118, 158, 220, 34];
 const PERIOD_STROKE: [number, number, number, number] = [150, 190, 240, 90];
 const PERIOD_LABEL: [number, number, number, number] = [176, 200, 232, 220];
@@ -89,12 +103,16 @@ const DASH_EXTENSION = new PathStyleExtension({ dash: true });
 const INTERVAL_BAND: LaneBand = { center: 0, half: 0 };
 
 // Progressive disclosure: a lane renders individual (named) bands and collapses
-// the remaining visible intervals into a single "~n+ more" block. Order of
-// significance decides which intervals stay individual, and intervals too thin
-// to read always collapse regardless of significance. The number of kept bands
-// is also bounded by how many fit in the lane's perpendicular half (see below),
-// so this is only the absolute ceiling.
+// the rest into a single "~n+ more" block. Intervals too thin for the lane's
+// width always collapse, and a band only joins the named set when the lane has
+// room for it (see buildIntervalBands). This floors how many bands get a name
+// at once — titles are wider than their bands, so unbounded naming would
+// overwrite names with names. The real budget scales with the lane's row
+// capacity (wider lane, more rows, more names), so widening a lane raises
+// what it can show. Both are applied at admission only: a band already on
+// screen is never evicted to make room for a newcomer.
 const BUDGET_BANDS = 40;
+const NAMED_PER_ROW = 4;
 // How many collapsed titles the "~n+ more" block carries for its hover tooltip.
 const MORE_NAMES_HINT = 3;
 
@@ -176,6 +194,10 @@ export interface LaneOptions {
   scale: Scale;
   coordExtent: [number, number];
   timeZoom: number;
+  pinned: ReadonlySet<string>;
+  // Id of the currently selected entity (info box open), if any; its band
+  // gets a highlight in its lane.
+  selectedId?: string | null;
   visibleCoordRange?: [number, number];
   visiblePerpRange?: [number, number];
 }
@@ -197,6 +219,8 @@ interface IntervalBandOptions<T extends Interval = Interval> {
   dashedEstimated?: boolean;
   title?: string;
   unitNoun?: string;
+  pinned: ReadonlySet<string>;
+  selectedId?: string | null;
   visibleCoordRange?: [number, number];
   visiblePerpRange?: [number, number];
 }
@@ -222,7 +246,8 @@ const INTERVAL_LABEL_HEIGHT = 13;
 // Minimum on-screen band width before a label is shown. Labels are centered
 // on the band and may overflow it (staggering + leader lines keep them
 // legible), so the band only needs to be a visible anchor, not wide enough
-// to contain the title.
+// to contain the title. Band *rendering* uses the looser minBandPx(half)
+// instead, so slivers can show as bare ticks on wide lanes.
 const MIN_BAND_LABEL_PX = 6;
 const STAGGER_STEP = 14;
 const STAGGER_MAX_STEPS = 6;
@@ -231,9 +256,14 @@ const SMOOTH_FACTOR = 0.3;
 
 // Remembers each label's current smoothed offset (in screen px) so it sticks
 // to its slot and glides toward a new one instead of flickering between
-// equally valid positions. Keyed by stable label id; the small set keeps this
-// bounded.
+// equally valid positions. Keyed by stable label id; entries the label hasn't
+// touched in a while (scrolled away, zoomed out of the named set) are pruned
+// so the map stays bounded.
 const labelOffsetCache = new Map<string, [number, number]>();
+const labelLastSeen = new Map<string, number>();
+let labelFrame = 0;
+const LABEL_CACHE_TTL_FRAMES = 600;
+const LABEL_CACHE_MAX = 4096;
 
 // Candidate (time-px, perp-px) offsets ordered by distance from the home slot,
 // so labels first try to sit still, then nudge along either axis, then both.
@@ -356,6 +386,20 @@ function staggerIntervalLabels(
   const result = labels.map((l) => ({ coord: l.coord, perp: l.perp }));
   if (labels.length === 0) return result;
 
+  labelFrame++;
+  if (
+    labelOffsetCache.size > LABEL_CACHE_MAX ||
+    labelFrame % 300 === 0
+  ) {
+    for (const id of labelOffsetCache.keys()) {
+      const seen = labelLastSeen.get(id) ?? 0;
+      if (labelFrame - seen > LABEL_CACHE_TTL_FRAMES) {
+        labelOffsetCache.delete(id);
+        labelLastSeen.delete(id);
+      }
+    }
+  }
+
   const order = labels
     .map((l, i) => ({ i, t: l.coord }))
     .sort((a, b) => a.t - b.t);
@@ -411,6 +455,7 @@ function staggerIntervalLabels(
       perp: label.perp + next[1],
     };
     labelOffsetCache.set(label.id, next);
+    labelLastSeen.set(label.id, labelFrame);
   }
 
   return result;
@@ -457,6 +502,122 @@ function bandPolygon(
   ];
 }
 
+// Which intervals currently hold a named band, per lane id. A band that gets
+// a name keeps it for as long as it stays on screen — visibility must never
+// decide whether a band is named, or bands would pop in and out while on
+// screen as the viewport slides. Memory drops a band only when it scrolls out
+// of view or zooming makes it too thin to read.
+const renderedCache = new Map<string, Set<string>>();
+
+// Which intervals were in the viewport on the previous frame, per lane id.
+// Replaced wholesale every frame, so it stays bounded by the viewport
+// contents. A visible band missing from last frame's set has just scrolled
+// in (or was just revealed by a zoom), which is the only moment it may claim
+// a name ahead of bands already on screen — naming a band in place,
+// mid-viewport, is the pop-in the sticky sets exist to avoid.
+const onScreenCache = new Map<string, Set<string>>();
+
+// The admission environment (time zoom, lane half-width) each lane last
+// admitted under. A zoom or a lane-width change re-opens admission to every
+// unnamed band on screen — the view changed, so re-evaluating is expected —
+// while a bare pan never does.
+const admissionEnvCache = new Map<string, { timeScale: number; half: number }>();
+
+// How many slices the visible time range is subdivided into when handing out
+// the naming budget, so a dense recent era cannot spend the whole lane's
+// names and leave earlier centuries looking empty.
+const NAMED_SLICES = 6;
+
+// Sticky sub-lane placement, keyed by lane id. Re-packing the visible subset
+// from scratch on every frame reshuffled swimlane rows whenever an entity
+// entered or left the viewport, so bands jumped around their neighbours while
+// panning. Instead each band remembers the row it was last drawn in and keeps
+// it for as long as it stays on screen; only newcomers (and bands whose row is
+// now taken) get placed. Rows are remembered for two groups: `active`, the
+// bands drawn individually last frame, and `idle`, bands that were on screen
+// but collapsed into the summary strip — both drop away once the interval
+// leaves the viewport, so the cache stays bounded.
+interface IntervalLaneMemory {
+  active: Map<string, number>;
+  idle: Map<string, number>;
+}
+
+const intervalLaneCache = new Map<string, IntervalLaneMemory>();
+
+// Assign sub-lanes to the bands that stay individual this frame. Bands with a
+// remembered row claim it first; because last frame's rows never put two
+// overlapping bands together, those claims cannot collide with each other —
+// only a band coming back from the collapsed strip has to look for a gap. The
+// rest fill gaps in start-year order, matching the one-shot greedy packing
+// this replaces, so a freshly laid out view lands on the layout it always did.
+function placeIntervalLanes<T extends Interval>(
+  laneId: string,
+  visible: T[],
+  individual: T[],
+  maxLane: number,
+): Map<string, number> {
+  const memory = intervalLaneCache.get(laneId) ?? {
+    active: new Map<string, number>(),
+    idle: new Map<string, number>(),
+  };
+  const lanes = new Map<string, number>();
+  const placed: T[][] = [];
+
+  const clashesWith = (lane: number, interval: T) =>
+    (placed[lane] ?? []).some(
+      (other) =>
+        other.startYear < interval.endYear && interval.startYear < other.endYear,
+    );
+
+  const claim = (interval: T, lane: number) => {
+    lanes.set(interval.id, lane);
+    (placed[lane] ??= []).push(interval);
+  };
+
+  const order = [...individual].sort(
+    (a, b) => a.startYear - b.startYear || a.endYear - b.endYear,
+  );
+
+  const pending: T[] = [];
+  for (const interval of order) {
+    const lane = memory.active.get(interval.id);
+    if (lane !== undefined && lane <= maxLane && !clashesWith(lane, interval)) {
+      claim(interval, lane);
+    } else {
+      pending.push(interval);
+    }
+  }
+
+  for (const interval of pending) {
+    // Prefer the row the band had while it was collapsed, if it is still free.
+    const remembered =
+      memory.active.get(interval.id) ?? memory.idle.get(interval.id);
+    if (
+      remembered !== undefined &&
+      remembered <= maxLane &&
+      !clashesWith(remembered, interval)
+    ) {
+      claim(interval, remembered);
+      continue;
+    }
+    let lane = 0;
+    while (clashesWith(lane, interval)) lane++;
+    claim(interval, lane);
+  }
+
+  // Bands on screen but collapsed hold on to their row for when they are shown
+  // again; bands outside the viewport are forgotten.
+  const idle = new Map<string, number>();
+  for (const interval of visible) {
+    if (lanes.has(interval.id)) continue;
+    const lane = memory.active.get(interval.id) ?? memory.idle.get(interval.id);
+    if (lane !== undefined) idle.set(interval.id, lane);
+  }
+  intervalLaneCache.set(laneId, { active: lanes, idle });
+
+  return lanes;
+}
+
 // Build stacked interval bands (polygons + labels) for a lane or the main axis.
 export function buildIntervalBands<T extends Interval = Interval>(
   opts: IntervalBandOptions<T>,
@@ -478,6 +639,8 @@ export function buildIntervalBands<T extends Interval = Interval>(
     dashedEstimated,
     title,
     unitNoun,
+    pinned,
+    selectedId,
     visibleCoordRange,
     visiblePerpRange,
   } = opts;
@@ -506,45 +669,271 @@ export function buildIntervalBands<T extends Interval = Interval>(
     visible.push({ interval, c0, c1 });
   }
 
-  // Progressive disclosure: keep the most significant intervals that are wide
-  // enough to read as individual bands; collapse the rest into one "~n+ more"
-  // block. The budget is bounded by how many stacked sub-lanes actually fit
-  // inside the lane's perpendicular half, so the kept bands don't spill off
-  // screen. The always-on period band (half = 0) is unbounded and never
-  // collapses (its sub-pixel spans are just dropped rather than summarized).
+  // Progressive disclosure: every named band needs a sub-lane row of its own
+  // and only maxRows rows fit inside the lane, so the visible set splits into
+  // named bands and one "~n+ more" block for the rest.
+  //
+  // A band joins the named set when it scrolls into view and fewer than
+  // maxRows named bands already overlap it: overlaps are what force bands
+  // into separate rows, so admitting one can never overflow the lane — no
+  // matter how the arrivals were ordered, the last band admitted has seen all
+  // of its overlapping neighbours already on screen. Once named it stays
+  // named while on screen. That is the whole point: an entity's place on
+  // screen must not depend on what else happens to be in the viewport, or it
+  // pops in and out as the view slides (the old top-N budget picked winners
+  // globally, so bands appeared mid-viewport only after neighbours scrolled
+  // away). Pinned intervals skip both gates; the always-on period band
+  // (half = 0) is unbounded and never collapses (its sub-pixel spans are
+  // dropped rather than summarized). The named set is also capped so titles
+  // cannot overwrite each other in views that pack hundreds of bands; the
+  // cap grows with the lane's row capacity.
+  //
+  // Two refinements keep the cap from distorting what is shown:
+  //
+  // - The budget is subdivided across the visible time range (per-slice
+  //   quotas), so a dense recent era cannot spend the whole lane's names and
+  //   leave earlier centuries looking empty even though many bands are
+  //   hidden there.
+  // - Bands newly entering the viewport are admitted before bands that have
+  //   been sitting on screen unnamed. During a pan, freed capacity therefore
+  //   goes to the bands scrolling in at the leading edge (which scroll in
+  //   named, alongside everything else) instead of switching a mid-viewport
+  //   band from the strip to a named band in place — the "pop-in" effect.
   const collapsible = band.half > 0;
-  const budget = collapsible
-    ? Math.min(BUDGET_BANDS, Math.max(2, Math.floor(band.half / 8)))
-    : Infinity;
+  const maxRows = collapsible ? rowsThatFit(band.half, thickness) : Infinity;
+  const maxNamed = Math.max(BUDGET_BANDS, maxRows * NAMED_PER_ROW);
+  // Bands thinner than this (along time) collapse into the strip; a wide
+  // lane accepts slivers, a narrow one stays with the strict 6px cutoff.
+  const minPx = minBandPx(band.half);
+  const isReadable = (v: (typeof visible)[number]) =>
+    (v.c1 - v.c0) * timeScale >= minPx;
 
-  const sorted = [...visible].sort(
-    (a, b) => (b.interval.significance ?? 0) - (a.interval.significance ?? 0),
-  );
-  const individual: typeof visible = [];
+  const sorted = [...visible].sort((a, b) => {
+    const aPinned = pinned.has(a.interval.id);
+    const bPinned = pinned.has(b.interval.id);
+    if (aPinned !== bPinned) return aPinned ? -1 : 1;
+    return (b.interval.significance ?? 0) - (a.interval.significance ?? 0);
+  });
+
+  let individual: typeof visible = [];
   const collapsed: typeof visible = [];
-  for (const v of sorted) {
-    const readable = (v.c1 - v.c0) * timeScale >= MIN_BAND_LABEL_PX;
-    if (readable && individual.length < budget) individual.push(v);
-    else if (collapsible) collapsed.push(v);
+  if (!collapsible) {
+    individual = sorted.filter(
+      (v) => pinned.has(v.interval.id) || isReadable(v),
+    );
+  } else {
+    const rendered = renderedCache.get(id) ?? new Set<string>();
+    const byId = new Map(visible.map((v) => [v.interval.id, v]));
+    const onScreen = onScreenCache.get(id) ?? new Set<string>();
+    // Forget bands that scrolled out of view or became too thin to read;
+    // both come from the view changing, which is allowed to reset a band.
+    // Dropping the screen memory too lets a band that becomes readable again
+    // after zooming in count as freshly entering.
+    for (const rid of [...rendered]) {
+      const v = byId.get(rid);
+      if (!v || !isReadable(v)) {
+        rendered.delete(rid);
+        onScreen.delete(rid);
+      }
+    }
+    const pinnedVisible = sorted.filter((v) => pinned.has(v.interval.id));
+    const overlaps = (
+      a: (typeof visible)[number],
+      b: (typeof visible)[number],
+    ) =>
+      a.interval.startYear < b.interval.endYear &&
+      b.interval.startYear < a.interval.endYear;
+
+    // The sticky set can outgrow the lane when the user narrows it: drop the
+    // least-significant names until both the count and the overlap depth fit
+    // again (a stable lane is within budget by construction, so this only
+    // fires on a width change or a new pin). Evicted bands fall into the
+    // strip and are retried with the other candidates on later frames, so
+    // widening the lane brings them back in significance order.
+    let evicted: Set<string> | null = null;
+    const depth = () => {
+      const events: [number, number][] = [];
+      const add = (v: (typeof visible)[number]) => {
+        events.push([v.interval.startYear, 1], [v.interval.endYear, -1]);
+      };
+      for (const rid of rendered) {
+        const v = byId.get(rid);
+        if (v) add(v);
+      }
+      for (const p of pinnedVisible) add(p);
+      events.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+      let cur = 0;
+      let max = 0;
+      for (const [, d] of events) {
+        cur += d;
+        if (cur > max) max = cur;
+      }
+      return max;
+    };
+    while (
+      rendered.size > 0 &&
+      (rendered.size + pinnedVisible.length > maxNamed || depth() > maxRows)
+    ) {
+      let worstId: string | null = null;
+      let worstSig = Infinity;
+      for (const rid of rendered) {
+        const v = byId.get(rid);
+        const sig = v ? (v.interval.significance ?? 0) : -Infinity;
+        if (sig < worstSig) {
+          worstSig = sig;
+          worstId = rid;
+        }
+      }
+      if (worstId === null) break;
+      rendered.delete(worstId);
+      (evicted ??= new Set()).add(worstId);
+    }
+
+    // A zoom or lane-width change re-opens admission to every unnamed band on
+    // screen; a bare pan does not. During a pan, only bands scrolling in at
+    // the edges may claim names, so capacity freed by bands scrolling out
+    // never switches a mid-viewport band from the strip to a named band in
+    // place.
+    const env = admissionEnvCache.get(id);
+    if (!env || env.timeScale !== timeScale || env.half !== band.half) {
+      onScreen.clear();
+    }
+    admissionEnvCache.set(id, { timeScale, half: band.half });
+
+    const candidates = sorted.filter(
+      (v) =>
+        !pinned.has(v.interval.id) &&
+        isReadable(v) &&
+        !rendered.has(v.interval.id) &&
+        !evicted?.has(v.interval.id),
+    );
+
+    // Hand out the naming budget per slice of the visible time range so the
+    // share spent on any era is bounded — otherwise the dense, significant
+    // modern era wins the whole cap and earlier centuries read as empty even
+    // though many bands are hidden there. Counts include pinned bands, which
+    // spend their region's share too.
+    const perSlice = Math.max(1, Math.floor(maxNamed / NAMED_SLICES));
+    const sliceOf = (v: (typeof visible)[number]): number => {
+      if (!visibleCoordRange) return 0;
+      const [vMin, vMax] = visibleCoordRange;
+      const t = ((v.c0 + v.c1) / 2 - vMin) / (vMax - vMin);
+      return Math.min(NAMED_SLICES - 1, Math.max(0, Math.floor(t * NAMED_SLICES)));
+    };
+    const sliceCounts = new Array<number>(NAMED_SLICES).fill(0);
+    for (const rid of rendered) {
+      const v = byId.get(rid);
+      if (v) sliceCounts[sliceOf(v)]++;
+    }
+    for (const p of pinnedVisible) sliceCounts[sliceOf(p)]++;
+
+    const bySignificance = (a: (typeof visible)[number], b: (typeof visible)[number]) =>
+      (b.interval.significance ?? 0) - (a.interval.significance ?? 0);
+    const entering = candidates
+      .filter((v) => !onScreen.has(v.interval.id))
+      .sort(bySignificance);
+
+    for (const v of entering) {
+      if (rendered.size + pinnedVisible.length >= maxNamed) break;
+      let overlap = 0;
+      for (const rid of rendered) {
+        const other = byId.get(rid);
+        if (other && overlaps(other, v)) {
+          overlap++;
+          if (overlap >= maxRows) break;
+        }
+      }
+      if (overlap < maxRows) {
+        for (const p of pinnedVisible) {
+          if (overlaps(p, v)) {
+            overlap++;
+            if (overlap >= maxRows) break;
+          }
+        }
+      }
+      if (overlap >= maxRows) continue;
+      const s = sliceOf(v);
+      if (sliceCounts[s] >= perSlice) continue;
+      rendered.add(v.interval.id);
+      sliceCounts[s]++;
+    }
+
+    onScreenCache.set(
+      id,
+      new Set(visible.map((v) => v.interval.id)),
+    );
+    renderedCache.set(id, rendered);
+
+    for (const v of sorted) {
+      if (
+        pinned.has(v.interval.id) ||
+        rendered.has(v.interval.id) ||
+        v.interval.id === selectedId
+      ) {
+        individual.push(v);
+      } else {
+        collapsed.push(v);
+      }
+    }
   }
 
-  // Re-pack the kept intervals into a compact swimlane (time-ordered) so they
-  // stack tightly instead of keeping their scattered sub-lane indices from the
-  // full, pre-assigned set.
-  const laneById = new Map<string, number>();
-  for (const { interval, lane } of assignIntervalLanes(
+  const laneById = placeIntervalLanes(
+    id,
+    visible.map((v) => v.interval),
     individual.map((v) => v.interval),
-  )) {
-    laneById.set(interval.id, lane);
-  }
+    collapsible ? maxRows - 1 : Infinity,
+  );
 
   // Individual bands (full color, stacked into sub-lanes).
   const bandData = individual.map(({ interval, c0, c1 }) => {
-    const off = band.center + laneOffset(laneById.get(interval.id) ?? 0, thickness);
+    const off = intervalRowPerp(laneById.get(interval.id) ?? 0, band, thickness);
     return {
       polygon: bandPolygon(c0, c1, off, thickness, orientation),
       estimated: interval.estimated,
+      pinned: pinned.has(interval.id),
+      selected: interval.id === selectedId,
     };
+  });
+
+  // Soft accent halo just outside each pinned band so it reads as pinned
+  // without hiding the band's own color.
+  const pinnedHaloData = individual.flatMap(({ interval, c0, c1 }) => {
+    if (!pinned.has(interval.id)) return [];
+    const off = intervalRowPerp(laneById.get(interval.id) ?? 0, band, thickness);
+    const pad = 3;
+    const padCoord = pad / timeScale;
+    return [
+      {
+        polygon: bandPolygon(
+          c0 - padCoord,
+          c1 + padCoord,
+          off,
+          thickness + pad * 2,
+          orientation,
+        ),
+      },
+    ];
+  });
+
+  // Brighter halo around the selected entity's band (info box open), drawn
+  // under the band like the pinned halo. A wider pad separates it from the
+  // pinned halo when an entity is both pinned and selected.
+  const selectedHaloData = individual.flatMap(({ interval, c0, c1 }) => {
+    if (interval.id !== selectedId) return [];
+    const off = intervalRowPerp(laneById.get(interval.id) ?? 0, band, thickness);
+    const pad = 5;
+    const padCoord = pad / timeScale;
+    return [
+      {
+        polygon: bandPolygon(
+          c0 - padCoord,
+          c1 + padCoord,
+          off,
+          thickness + pad * 2,
+          orientation,
+        ),
+      },
+    ];
   });
 
   const viewport =
@@ -554,6 +943,17 @@ export function buildIntervalBands<T extends Interval = Interval>(
 
   const labelCandidates: IntervalLabelCandidate[] = [];
   for (const { interval, c0, c1 } of individual) {
+    // Slivers admitted by the lane's width-dependent readability floor render
+    // as bare ticks; a label needs this fixed legibility floor of band to sit
+    // on, no matter how wide the lane is. Pinned and selected bands always
+    // carry their label so the highlight has a name attached.
+    if (
+      !pinned.has(interval.id) &&
+      interval.id !== selectedId &&
+      (c1 - c0) * timeScale < MIN_BAND_LABEL_PX
+    ) {
+      continue;
+    }
     const displayTitle = interval.estimated
       ? `≈ ${interval.title}`
       : interval.title;
@@ -569,7 +969,7 @@ export function buildIntervalBands<T extends Interval = Interval>(
       coord = lo >= hi ? (vMin + vMax) / 2 : Math.min(Math.max(coord, lo), hi);
     }
 
-    const off = band.center + laneOffset(laneById.get(interval.id) ?? 0, thickness);
+    const off = intervalRowPerp(laneById.get(interval.id) ?? 0, band, thickness);
     labelCandidates.push({
       id: `${id}:${interval.id}`,
       text: displayTitle,
@@ -594,7 +994,11 @@ export function buildIntervalBands<T extends Interval = Interval>(
     text: label.text,
     anchor,
     baseline: "center",
-    color: labelColor,
+    color: pinned.has(label.interval.id)
+      ? PIN_HIGHLIGHT
+      : label.interval.id === selectedId
+        ? SELECTED_COLOR
+        : labelColor,
     detail: intervalDetail(label.interval),
   }));
 
@@ -696,6 +1100,40 @@ export function buildIntervalBands<T extends Interval = Interval>(
   ];
 
   const layers: Layer[] = [
+    ...(pinnedHaloData.length > 0
+      ? [
+          new PolygonLayer({
+            id: `${id}-pinned-halo`,
+            data: pinnedHaloData,
+            getPolygon: (d: { polygon: [number, number][] }) => d.polygon,
+            filled: true,
+            getFillColor: [127, 209, 255, 44],
+            stroked: true,
+            getLineColor: [127, 209, 255, 190],
+            getLineWidth: 1,
+            lineWidthMinPixels: 1,
+            pickable: false,
+            parameters: { depthTest: false },
+          }),
+        ]
+      : []),
+    ...(selectedHaloData.length > 0
+      ? [
+          new PolygonLayer({
+            id: `${id}-selected-halo`,
+            data: selectedHaloData,
+            getPolygon: (d: { polygon: [number, number][] }) => d.polygon,
+            filled: true,
+            getFillColor: [255, 255, 255, 36],
+            stroked: true,
+            getLineColor: [255, 255, 255, 220],
+            getLineWidth: 1,
+            lineWidthMinPixels: 1,
+            pickable: false,
+            parameters: { depthTest: false },
+          }),
+        ]
+      : []),
     new PolygonLayer({
       id: `${id}-bands`,
       data: bandData,
@@ -703,7 +1141,14 @@ export function buildIntervalBands<T extends Interval = Interval>(
       filled: true,
       getFillColor: (d) => (d.estimated ? estimateFill : fillColor),
       stroked: true,
-      getLineColor: (d) => (d.estimated ? estimateStroke : strokeColor),
+      getLineColor: (d) =>
+        d.pinned
+          ? PIN_HIGHLIGHT
+          : d.selected
+            ? SELECTED_COLOR
+            : d.estimated
+              ? estimateStroke
+              : strokeColor,
       getLineWidth: 1,
       lineWidthMinPixels: 1,
       pickable: false,
@@ -858,8 +1303,14 @@ function buildSeriesLane(
   } = cfg;
   const side = band.center >= 0 ? 1 : -1;
 
+  // Estimated tail points (e.g. CO2's zero-value pre-industrial row) can fall
+  // below the dataset's non-estimated minimum, which on a log axis sits far
+  // outside the band; clamp so the dashed tail hugs the lane's inner edge.
   const perpFor = (value: number) =>
-    fractionToPerp(valueToFraction(value, min, max, scale), band);
+    fractionToPerp(
+      Math.min(Math.max(valueToFraction(value, min, max, scale), 0), 1),
+      band,
+    );
 
   // Leading estimated points (before the first measured year) are drawn as a
   // dashed extrapolation; everything from the first measured point onward is
@@ -1211,6 +1662,8 @@ export function buildLaneLayers(
       dashedEstimated: true,
       title: "Notable lifespans",
       unitNoun: "notable people",
+      pinned: opts.pinned,
+      selectedId: opts.selectedId,
       visibleCoordRange: opts.visibleCoordRange,
       visiblePerpRange: opts.visiblePerpRange,
     });
@@ -1233,6 +1686,8 @@ export function buildLaneLayers(
       dashedEstimated: true,
       title: "Cultural works",
       unitNoun: "cultural works",
+      pinned: opts.pinned,
+      selectedId: opts.selectedId,
       visibleCoordRange: opts.visibleCoordRange,
       visiblePerpRange: opts.visiblePerpRange,
     });
@@ -1255,6 +1710,8 @@ export function buildLaneLayers(
       dashedEstimated: true,
       title: "Wars",
       unitNoun: "wars",
+      pinned: opts.pinned,
+      selectedId: opts.selectedId,
       visibleCoordRange: opts.visibleCoordRange,
       visiblePerpRange: opts.visiblePerpRange,
     });
@@ -1273,6 +1730,8 @@ export function buildLaneLayers(
     labelColor: POWERS_LABEL,
     title: "Major world powers",
     unitNoun: "world powers",
+    pinned: opts.pinned,
+    selectedId: opts.selectedId,
     visibleCoordRange: opts.visibleCoordRange,
     visiblePerpRange: opts.visiblePerpRange,
   });
@@ -1280,7 +1739,7 @@ export function buildLaneLayers(
 
 // The timeline's own period bands, always rendered (not toggleable).
 export function buildPeriodBands(opts: LaneOptions): Layer[] {
-  const { orientation, scale, coordExtent, timeZoom, visibleCoordRange, visiblePerpRange } = opts;
+  const { orientation, scale, coordExtent, timeZoom, pinned, selectedId, visibleCoordRange, visiblePerpRange } = opts;
   return buildIntervalBands({
     id: "periods",
     assigned: PERIODS_ASSIGNED,
@@ -1293,6 +1752,8 @@ export function buildPeriodBands(opts: LaneOptions): Layer[] {
     fillColor: PERIOD_FILL,
     strokeColor: PERIOD_STROKE,
     labelColor: PERIOD_LABEL,
+    pinned,
+    selectedId,
     visibleCoordRange,
     visiblePerpRange,
   });

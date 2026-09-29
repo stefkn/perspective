@@ -131,7 +131,3 @@ export function formatFullDate(fractionalYear: number): string {
   const { year, month, day } = fractionalYearToDate(fractionalYear);
   return `${MONTHS[month - 1]} ${day}, ${year}`;
 }
-
-export function formatGap(years: number): string {
-  return `${Math.round(years).toLocaleString("en-US")} years`;
-}

@@ -48,17 +48,22 @@ function yearFromValue(raw: string): ParsedTime | undefined {
   // Skip prehistoric / geological date forms we can't place cleanly.
   if (/\b(?:BP|ka|mya)\b|Before Present|years? ago/i.test(v)) return undefined;
   const bce = /\b(?:BC|BCE)\b/i.test(v);
-  const circa = /\bc(?:irca)?\.?/i.test(v) || /\b(?:approx(?:imately)?|flourished|fl\.)\b/i.test(v);
+  // The bare "c" must be followed by whitespace/digits, or words like
+  // "Cannae" or "College" in a date value would flag it as an estimate.
+  const circa = /\b(?:c|ca|circa)\.?\s/i.test(v) || /\b(?:approx(?:imately)?|flourished|fl\.)\b/i.test(v);
 
-  let m = v.match(/\{\{\s*(?:birth|death)[ _]date[^|}]*\|\s*(\d{3,4})/i);
-  if (m) return { year: Number(m[1]), precision: "year", estimated: false };
-  m = v.match(/\{\{\s*(?:birth|death)[ _]year[^|}]*\|\s*(\d{3,4})/i);
+  // {{Birth date|df=yes|1922|6|12}} and friends: params like df= may precede
+  // the year and the template name may be hyphenated ("Birth-date"), so match
+  // the template prefix and take the first year-like number inside it.
+  let m = v.match(/\{\{\s*(?:birth|death)[ _-](?:date|year)[^}]*?(\d{3,4})/i);
   if (m) return { year: Number(m[1]), precision: "year", estimated: false };
 
   m = v.match(/(\d{1,2})(?:st|nd|rd|th)[ -]centur(?:y|ies)/i);
   if (m) {
     const c = Number(m[1]);
-    return { year: bce ? -c * 100 : c * 100, precision: "century", estimated: true };
+    // Anchor both eras at the century's first year: "4th century" -> 301 CE,
+    // "4th century BC" -> 400 BCE (year -400).
+    return { year: bce ? -c * 100 : c * 100 - 99, precision: "century", estimated: true };
   }
 
   m = v.match(/(\d{3,4})/);

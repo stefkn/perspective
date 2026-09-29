@@ -6,6 +6,7 @@ import { OrthographicView } from "@deck.gl/core";
 import type { PickingInfo } from "@deck.gl/core";
 import { LineLayer, PolygonLayer, ScatterplotLayer } from "@deck.gl/layers";
 import type { TimelineEvent } from "../lib/types";
+import { TAP_RECOGNIZER_OPTIONS } from "./Timeline";
 import {
   yearToCoord,
   type Orientation,
@@ -137,6 +138,10 @@ export default function Minimap({
       layers={layers}
       viewState={viewState}
       controller={false}
+      // Keep minimap taps responsive and tolerant of near-misses for the same
+      // reasons as the main view (see Timeline.tsx).
+      pickingRadius={12}
+      eventRecognizerOptions={TAP_RECOGNIZER_OPTIONS}
       width={size.width}
       height={size.height}
       onClick={handlePick}

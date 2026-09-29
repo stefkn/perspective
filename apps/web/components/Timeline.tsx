@@ -1,8 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import DeckGL from "@deck.gl/react";
-import { OrthographicView } from "@deck.gl/core";
+import { OrthographicView, type DeckProps } from "@deck.gl/core";
 import {
   LineLayer,
   ScatterplotLayer,
@@ -23,6 +23,7 @@ import type { LaneBand, LaneDefinition, LaneId } from "../lib/lanes";
 import {
   buildPeriodBands,
   buildLaneLayers,
+  PIN_HIGHLIGHT,
   STICKY_RULER_INSET,
   STICKY_RULER_LABEL_OFFSET,
 } from "./lane-layers";
@@ -54,6 +55,14 @@ const ON_THIS_DAY_LABEL_EDGE_MARGIN = 120;
 const ON_THIS_DAY_DOT_MARGIN = 48;
 
 const LABEL_ANGLE_DEG = 45;
+
+// Tap recognizer overrides (see the DeckGL props and the deckRef effect for
+// why). The dblclick entry is belt-and-braces: deck 9.3 currently ignores the
+// `enable` flag, so the ref effect disables the recognizer at runtime.
+export const TAP_RECOGNIZER_OPTIONS = {
+  dblclick: { enable: false },
+  click: { time: 1000 },
+} as unknown as NonNullable<DeckProps["eventRecognizerOptions"]>;
 
 // Cap the number of on-this-day labels shown at once: at century-level zooms
 // the visible range holds thousands of events, so a dense label cloud is
@@ -94,6 +103,7 @@ interface TimelineProps {
   scale: Scale;
   viewState: TimeViewState;
   minSignificance: number;
+  pinned: ReadonlySet<string>;
   coordExtent: [number, number];
   labelAlpha: Record<string, number>;
   visibleCoordRange: [number, number] | null;
@@ -127,6 +137,7 @@ export default function Timeline({
   scale,
   viewState,
   minSignificance,
+  pinned,
   coordExtent,
   labelAlpha,
   visibleCoordRange,
@@ -232,13 +243,14 @@ export default function Timeline({
         const lane = otdLabelLanes[event.id];
         if (orientation === "horizontal") {
           const perp = otdPerpOffset(lane);
-          return { position: offset(coord, perp), text: event.title, event };
+          return { position: offset(coord, perp), text: event.title, event, otd: true };
         }
         const shift = otdTimeShiftPx(lane) / zoomScale;
         return {
           position: offset(coord + shift, PORTRAIT_LABEL_CLEARANCE),
           text: event.title,
           event,
+          otd: true,
         };
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -282,6 +294,24 @@ export default function Timeline({
   );
   const [hoveredId, setHoveredId] = useState<string | null>(null);
 
+  // The default tap recognizer queues every click ~300ms behind a possible
+  // double-click and cancels a pending click when the user taps again within
+  // that window, so rapid tapping never selects (this view has double-click
+  // zoom disabled anyway). Disabling the dblclick recognizer via deck's
+  // `eventRecognizerOptions` does not stick (its `enable` flag is not applied
+  // to the constructed recognizer in deck 9.3), so patch it once the deck
+  // instance exists, using the recognizer's own public `set()` API. With the
+  // recognizer disabled, clicks emit immediately on pointer-up and nothing
+  // cancels them.
+  const deckRef = useRef<any>(null);
+  useEffect(() => {
+    const em = deckRef.current?.deck?.eventManager;
+    const dbl = em?.manager?.recognizers?.find(
+      (r: any) => r?.options?.event === "dblclick",
+    );
+    dbl?.set({ enable: false });
+  }, []);
+
   // On touch, default the focus to the on-this-day dot nearest the viewport
   // center so there is always a tap-target-free way to read a label.
   const centerOtdId = useMemo(() => {
@@ -319,6 +349,7 @@ export default function Timeline({
         ),
         text: event.title,
         event,
+        otd: true,
       },
     ];
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -354,10 +385,13 @@ export default function Timeline({
 
     const eventPoints = events
       .map((event) => {
-        const opacity = opacityForSignificance(
-          event.significance ?? 0,
-          minSignificance,
-        );
+        // Pinned events stay fully visible however far out the view is zoomed.
+        const opacity = pinned.has(event.id)
+          ? 1
+          : opacityForSignificance(
+              event.significance ?? 0,
+              minSignificance,
+            );
         if (opacity <= 0) return null;
         return {
           position: offset(yearToCoord(event.year, scale), 0),
@@ -367,6 +401,8 @@ export default function Timeline({
         };
       })
       .filter((p): p is NonNullable<typeof p> => p !== null);
+
+    const pinnedEventRings = eventPoints.filter((p) => pinned.has(p.event.id));
 
     const labels = events
       .filter((event) => {
@@ -381,10 +417,12 @@ export default function Timeline({
         return {
           position: offset(yearToCoord(event.year, scale), perp),
           text: event.title,
-          color: [
-            ...significanceColor(event.significance ?? 0, 1).slice(0, 3),
-            Math.round(230 * alpha),
-          ] as [number, number, number, number],
+          color: pinned.has(event.id)
+            ? PIN_HIGHLIGHT
+            : ([
+                ...significanceColor(event.significance ?? 0, 1).slice(0, 3),
+                Math.round(230 * alpha),
+              ] as [number, number, number, number]),
           event,
         };
       });
@@ -452,7 +490,7 @@ export default function Timeline({
       return offset(d.coord + spread, 0);
     };
 
-    const laneOptions = { orientation, scale, coordExtent, timeZoom, visibleCoordRange: visibleCoordRange ?? undefined, visiblePerpRange: visiblePerpRange ?? undefined };
+    const laneOptions = { orientation, scale, coordExtent, timeZoom, pinned, selectedId: selectedEvent?.id ?? null, visibleCoordRange: visibleCoordRange ?? undefined, visiblePerpRange: visiblePerpRange ?? undefined };
     const laneLayers = lanes.flatMap((lane) =>
       buildLaneLayers(lane, laneBands[lane.id], laneOptions),
     );
@@ -604,6 +642,20 @@ export default function Timeline({
         fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
         characterSet: "auto",
         pickable: false,
+      }),
+      new ScatterplotLayer({
+        id: "pinned-event-rings",
+        data: pinnedEventRings,
+        getPosition: (d) => d.position,
+        getFillColor: [0, 0, 0, 0],
+        getLineColor: PIN_HIGHLIGHT,
+        stroked: true,
+        getLineWidth: 2,
+        lineWidthMinPixels: 1.5,
+        radiusUnits: "pixels",
+        getRadius: 9,
+        pickable: false,
+        parameters: { depthTest: false },
       }),
       new ScatterplotLayer({
         id: "events",
@@ -763,6 +815,7 @@ export default function Timeline({
     orientation,
     scale,
     minSignificance,
+    pinned,
     coordExtent,
     labelAlpha,
     visibleCoordRange,
@@ -793,6 +846,15 @@ export default function Timeline({
         maxZoom: 16,
       }}
       controller={true}
+      ref={deckRef}
+      // Widen the tap search so a tap landing in the gap between two labels
+      // (or slightly off a glyph) still picks the nearest label instead of
+      // registering as a click on empty space and closing the info box.
+      pickingRadius={12}
+      // Widens the down-up tap window: the synchronous pointerdown pick or a
+      // layer rebuild can delay the pointerup past the recognizer's default
+      // 250ms window, silently discarding genuine taps.
+      eventRecognizerOptions={TAP_RECOGNIZER_OPTIONS}
       onViewStateChange={({ viewState: vs }) => {
         const t = vs.target ?? [0, 0, 0];
         onViewStateChange({

@@ -7,11 +7,11 @@
 // Usage: tsx src/enrich.ts [person|state|war|work|period|event ...]
 // Reads data/infobox/{type}.jsonl, writes data/enriched/{type}.jsonl
 
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadEnvFile } from "node:process";
-import { readJsonl, DATA_DIR } from "./checkpoint";
+import { readJsonl, DATA_DIR, writeAtomic } from "./checkpoint";
 import { fetchLeads } from "./wikipedia";
 import type { EntityType, ScoredCandidate } from "./types";
 
@@ -151,6 +151,31 @@ async function main() {
 
     const leads = await fetchLeads(rows.map((r) => r.wikipediaTitle));
     const enriched = new Map<string, { description: string; lanes: string[] }>();
+    const citations = new Map<string, string>();
+
+    // Serialize the output for every entity based on what's known so far.
+    // Called after each LLM batch so an interrupted run keeps everything paid
+    // for up to that point instead of losing the whole type on a crash.
+    const writeCheckpoint = async () => {
+      const out: EnrichedCandidate[] = rows.map((r) => {
+        const prev = existing.get(r.qid);
+        const e = prev ?? enriched.get(r.qid);
+        const c = citations.get(r.qid);
+        return {
+          ...r,
+          description: e?.description ?? "",
+          lanes: e?.lanes ?? [],
+          ...(c
+            ? { citations: [c] }
+            : prev?.citations
+              ? { citations: prev.citations }
+              : {}),
+        };
+      });
+      const path = resolve(OUT_DIR, `${t}.jsonl`);
+      await writeAtomic(path, out.map((s) => JSON.stringify(s)).join("\n") + "\n");
+      return path;
+    };
 
     // Pass 1: description + lanes for entities missing them, batched.
     const toDescribe = rows.filter((r) => !existing.has(r.qid));
@@ -180,6 +205,7 @@ async function main() {
           enriched.set(e.qid, { description: v.description, lanes: normalizeLanes(v.lanes) });
         }
       }
+      await writeCheckpoint();
       await sleep(150);
     }
     console.error(`  got descriptions for ${enriched.size}/${rows.length}`);
@@ -188,7 +214,6 @@ async function main() {
     // end dates are left alone: "no end" is the correct default for living
     // people, ongoing states/periods, and point-like works.
     const missingDates = rows.filter((r) => !r.start);
-    const citations = new Map<string, string>();
     if (missingDates.length) {
       console.error(`  extracting dates for ${missingDates.length} entities missing dates...`);
       const D_BATCH = 5;
@@ -223,30 +248,26 @@ async function main() {
             e.end = { year: v.end.year, precision: "year", estimated: v.end.estimated };
             if (v.citation && !citations.has(e.qid)) citations.set(e.qid, v.citation);
           }
+          // Start and end are filled independently from one batch response;
+          // if the pair comes back inverted, one of them is a misread.
+          // Drop the end rather than keeping a contradictory span ("no end"
+          // is the safe default), so emit never clamps a lifespan to zero.
+          if (e.start && e.end && e.end.year < e.start.year) {
+            console.error(`  ${e.qid}: LLM end (${e.end.year}) predates start (${e.start.year}); dropping end`);
+            e.end = undefined;
+            // Keep the citation only if it also backs the surviving start.
+            if (!citationSupportsYear(e.start.year, citations.get(e.qid))) {
+              citations.delete(e.qid);
+            }
+          }
         }
+        await writeCheckpoint();
         await sleep(150);
       }
     }
 
-    const out: EnrichedCandidate[] = rows.map((r) => {
-      const prev = existing.get(r.qid);
-      const e = prev ?? enriched.get(r.qid);
-      const c = citations.get(r.qid);
-      return {
-        ...r,
-        description: e?.description ?? "",
-        lanes: e?.lanes ?? [],
-        ...(c
-          ? { citations: [c] }
-          : prev?.citations
-            ? { citations: prev.citations }
-            : {}),
-      };
-    });
-
-    const path = resolve(OUT_DIR, `${t}.jsonl`);
-    await writeFile(path, out.map((s) => JSON.stringify(s)).join("\n") + "\n");
-    console.error(`wrote ${out.length} enriched ${t} -> ${path}`);
+    const path = await writeCheckpoint();
+    console.error(`wrote ${rows.length} enriched ${t} -> ${path}`);
   }
 }
 

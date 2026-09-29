@@ -62,6 +62,7 @@ const MAX_ZOOM = 16;
 const FIT_PAD = 1.15;
 
 const LANE_STORAGE_KEY = "perspective.lanes";
+const PIN_STORAGE_KEY = "perspective.pinned";
 
 function defaultLaneState(): {
   items: LaneItem[];
@@ -122,11 +123,12 @@ function loadLaneState(): {
           perpScale?: number;
         };
         if (typeof entry.visible === "boolean") configs[id].visible = entry.visible;
+        // Snap stored half-widths onto the slider's 5px step so preset buttons
+        // (55/90/160) always sit on-step and drags don't jump off a stored value.
+        const snapToStep = (v: number) =>
+          Math.min(Math.max(Math.round(v / 5) * 5, LANE_HALF_MIN), LANE_HALF_MAX);
         if (typeof entry.half === "number") {
-          configs[id].half = Math.min(
-            Math.max(entry.half, LANE_HALF_MIN),
-            LANE_HALF_MAX,
-          );
+          configs[id].half = snapToStep(entry.half);
         } else if (
           entry.size === "compact" ||
           entry.size === "normal" ||
@@ -134,10 +136,7 @@ function loadLaneState(): {
         ) {
           // Migrate the old size + perpScale pair into a single half-width.
           const scale = typeof entry.perpScale === "number" ? entry.perpScale : 1;
-          configs[id].half = Math.min(
-            Math.max(LANE_SIZE_HALF[entry.size] * scale, LANE_HALF_MIN),
-            LANE_HALF_MAX,
-          );
+          configs[id].half = snapToStep(LANE_SIZE_HALF[entry.size] * scale);
         }
       }
     }
@@ -176,32 +175,50 @@ function useAnimatedAlphas(
   const targetsRef = useRef(targets);
   targetsRef.current = targets;
   const alphasRef = useRef<Record<string, number>>({});
+  const rafRef = useRef(0);
+  const runningRef = useRef(false);
+
+  // One frame of easing toward the current targets. Schedules the next frame
+  // while something is still moving, then parks the loop once settled.
+  const tick = useCallback(() => {
+    const target = targetsRef.current;
+    const current = alphasRef.current;
+    const next: Record<string, number> = {};
+    let changed = false;
+    for (const id of new Set([
+      ...Object.keys(target),
+      ...Object.keys(current),
+    ])) {
+      const t = target[id] ?? 0;
+      const c = current[id] ?? 0;
+      let n = c + (t - c) * 0.18;
+      if (Math.abs(t - n) < 0.01) n = t;
+      if (n > 0.004) next[id] = n;
+      if (Math.abs(n - c) > 0.003) changed = true;
+    }
+    alphasRef.current = next;
+    if (changed) {
+      setAlphas(next);
+      rafRef.current = requestAnimationFrame(tick);
+    } else {
+      runningRef.current = false;
+    }
+  }, []);
 
   useEffect(() => {
-    let raf = 0;
-    const tick = () => {
-      const target = targetsRef.current;
-      const current = alphasRef.current;
-      const next: Record<string, number> = {};
-      let changed = false;
-      for (const id of new Set([
-        ...Object.keys(target),
-        ...Object.keys(current),
-      ])) {
-        const t = target[id] ?? 0;
-        const c = current[id] ?? 0;
-        let n = c + (t - c) * 0.18;
-        if (Math.abs(t - n) < 0.01) n = t;
-        if (n > 0.004) next[id] = n;
-        if (Math.abs(n - c) > 0.003) changed = true;
-      }
-      alphasRef.current = next;
-      if (changed) setAlphas(next);
-      raf = requestAnimationFrame(tick);
+    return () => {
+      cancelAnimationFrame(rafRef.current);
+      runningRef.current = false;
     };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
   }, []);
+
+  // Kick the loop whenever new targets arrive (including mount) unless it is
+  // already animating; the loop never runs while idle.
+  useEffect(() => {
+    if (runningRef.current) return;
+    runningRef.current = true;
+    rafRef.current = requestAnimationFrame(tick);
+  }, [targets, tick]);
 
   return alphas;
 }
@@ -243,6 +260,9 @@ export default function TimelineApp() {
   const items = laneState.items;
   const configs = laneState.configs;
 
+  const [pinned, setPinned] = useState<ReadonlySet<string>>(new Set());
+  const [pinsHydrated, setPinsHydrated] = useState(false);
+
   const [perpOffset, setPerpOffset] = useState(0);
 
   const updateLane = useCallback(
@@ -277,6 +297,17 @@ export default function TimelineApp() {
       return { items, configs: s.configs };
     });
   }, []);
+
+  const togglePin = useCallback((id: string) => {
+    setPinned((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const clearPins = useCallback(() => setPinned(new Set()), []);
 
   const laneSides = useMemo(() => {
     const sides = {} as Record<LaneId, -1 | 1>;
@@ -326,6 +357,43 @@ export default function TimelineApp() {
       // Ignore storage failures (private mode, quota, etc).
     }
   }, [laneHydrated, items, configs]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const raw = window.localStorage.getItem(PIN_STORAGE_KEY);
+      if (raw) {
+        const parsed: unknown = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          const stored = parsed.filter(
+            (id): id is string => typeof id === "string",
+          );
+          // A pin made in the brief window before hydration would otherwise be
+          // discarded here; union instead of overwrite.
+          setPinned((prev) => {
+            const merged = new Set(prev);
+            for (const id of stored) merged.add(id);
+            return merged;
+          });
+        }
+      }
+    } catch {
+      // Ignore corrupted storage.
+    }
+    setPinsHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (!pinsHydrated || typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(
+        PIN_STORAGE_KEY,
+        JSON.stringify([...pinned]),
+      );
+    } catch {
+      // Ignore storage failures (private mode, quota, etc).
+    }
+  }, [pinsHydrated, pinned]);
 
   const clampPerp = useCallback(
     (offset: number) => {
@@ -613,8 +681,8 @@ export default function TimelineApp() {
   );
 
   const labelTargets = useMemo(
-    () => resolveLabelTargets(labelBoxes, orientation),
-    [labelBoxes, orientation],
+    () => resolveLabelTargets(labelBoxes, orientation, pinned),
+    [labelBoxes, orientation, pinned],
   );
 
   const labelAlpha = useAnimatedAlphas(labelTargets);
@@ -813,10 +881,17 @@ export default function TimelineApp() {
           lanes={LANES}
           items={items}
           configs={configs}
+          pinnedCount={pinned.size}
           onToggle={toggleLane}
           onReorder={reorderItem}
           onSetHalf={setLaneHalf}
+          onClearPins={clearPins}
         />
+        {pinned.size > 0 && (
+          <button className="app-clear-pins" onClick={clearPins}>
+            Clear pins ({pinned.size})
+          </button>
+        )}
         <button className="app-reset" onClick={resetView}>
           Reset view
         </button>
@@ -847,6 +922,7 @@ export default function TimelineApp() {
               scale={scale}
               viewState={viewState}
               minSignificance={minSignificance}
+              pinned={pinned}
               coordExtent={coordExtent}
               labelAlpha={labelAlpha}
               visibleCoordRange={visibleCoordRange}
@@ -897,6 +973,8 @@ export default function TimelineApp() {
         {selectedEvent && (
           <EventDetail
             event={selectedEvent}
+            pinned={pinned.has(selectedEvent.id)}
+            onTogglePin={() => togglePin(selectedEvent.id)}
             onClose={() => setSelectedEvent(null)}
           />
         )}

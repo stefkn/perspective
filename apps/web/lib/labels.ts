@@ -143,9 +143,13 @@ function intersects(a: Rect, b: Rect): boolean {
 export function resolveLabelTargets(
   boxes: LabelBox[],
   orientation: Orientation,
+  pinned: ReadonlySet<string> = new Set(),
 ): Record<string, number> {
   const sorted = [...boxes].sort((a, b) => {
     if (a.selected !== b.selected) return a.selected ? -1 : 1;
+    const aPinned = pinned.has(a.id);
+    const bPinned = pinned.has(b.id);
+    if (aPinned !== bPinned) return aPinned ? -1 : 1;
     if (b.significance !== a.significance) {
       return b.significance - a.significance;
     }
@@ -156,6 +160,11 @@ export function resolveLabelTargets(
   const targets: Record<string, number> = {};
 
   for (const box of sorted) {
+    // Pinned labels win their slot regardless of collisions.
+    if (pinned.has(box.id)) {
+      targets[box.id] = 1;
+      continue;
+    }
     const rect = rectOf(box, orientation);
     const collide = kept.some((k) => intersects(rect, k));
     targets[box.id] = collide ? 0 : 1;
