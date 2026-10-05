@@ -457,7 +457,117 @@ function bandPolygon(
   ];
 }
 
+// Stable repack: time-ordered greedy exactly like assignIntervalLanes, but a
+// survivor keeps its previous sub-lane whenever that lane is still
+// conflict-free, instead of always taking the lowest free lane. Panning only
+// changes the kept set at the viewport edges, so survivors overwhelmingly
+// keep their lanes and on-screen bands stop reshuffling. Pure — the caller
+// carries `prevLanes` (interval id → lane) across frames.
+export function assignStableLanes<T extends Interval>(
+  intervals: T[],
+  prevLanes: Map<string, number> | null,
+): AssignedInterval<T>[] {
+  const sorted = [...intervals].sort(
+    (a, b) => a.startYear - b.startYear || a.endYear - b.endYear,
+  );
+
+  const laneEnds: number[] = [];
+  const result: AssignedInterval<T>[] = [];
+
+  for (const interval of sorted) {
+    const prev = prevLanes?.get(interval.id);
+    let lane: number;
+    if (
+      prev !== undefined &&
+      Number.isInteger(prev) &&
+      prev >= 0 &&
+      prev < intervals.length &&
+      (laneEnds[prev] === undefined || laneEnds[prev] <= interval.startYear)
+    ) {
+      lane = prev;
+    } else {
+      lane = 0;
+      while (lane < laneEnds.length && laneEnds[lane] > interval.startYear) {
+        lane++;
+      }
+    }
+    while (laneEnds.length <= lane) laneEnds.push(-Infinity);
+    laneEnds[lane] = interval.endYear;
+    result.push({ interval, lane });
+  }
+
+  return result;
+}
+
 // Build stacked interval bands (polygons + labels) for a lane or the main axis.
+export interface KeptCandidate {
+  id: string;
+  readable: boolean;
+}
+
+// Extra significance ranks a previously kept interval may hold past the
+// budget before it collapses. Newcomers need rank < budget to appear, while
+// incumbents survive until rank > budget + slack, so slow pans (where ranks
+// drift by one or two at the viewport edges) don't churn the kept set every
+// frame. The kept set can transiently exceed the budget by ~slack bands.
+export const KEPT_BUDGET_SLACK = 6;
+
+// Membership hysteresis for progressive disclosure. `cands` must be in
+// significance order (highest first); `prevKept` is the previous frame's kept
+// ids (null on the first frame). Pure — the caller owns `prevKept`.
+export function selectKeptIds(
+  cands: KeptCandidate[],
+  prevKept: Set<string> | null,
+  budget: number,
+  slack: number,
+): Set<string> {
+  const kept = new Set<string>();
+  let count = 0;
+  for (const c of cands) {
+    if (!c.readable) continue;
+    const limit = prevKept?.has(c.id) ? budget + slack : budget;
+    if (count < limit) {
+      kept.add(c.id);
+    }
+    count++;
+  }
+  return kept;
+}
+
+// Previous frame's kept ids per lane-band id, feeding selectKeptIds.
+const keptMemory = new Map<string, Set<string>>();
+
+// Previous frame's packed sub-lanes per lane-band id, feeding
+// assignStableLanes. Replaced wholesale each build, so no pruning needed.
+const laneMemory = new Map<string, Map<string, number>>();
+
+// Displayed "~n+ more" counts, per lane-band id. The true hidden count ticks
+// with every interval crossing the viewport edge while panning, so the label
+// is only refreshed once it has drifted past a ratio threshold — occasional
+// meaningful updates instead of a flickering counter. The "~" prefix already
+// marks it approximate.
+const moreDisplayCache = new Map<string, number>();
+const MORE_COUNT_UPDATE_RATIO = 0.12;
+
+export function displayedMoreCount(
+  laneId: string,
+  truth: number,
+): number {
+  const prev = moreDisplayCache.get(laneId);
+  let shown = truth;
+  if (prev !== undefined && prev > 0) {
+    const drift = Math.abs(truth - prev) / prev;
+    if (drift < MORE_COUNT_UPDATE_RATIO) shown = prev;
+  }
+  moreDisplayCache.set(laneId, shown);
+  return shown;
+}
+
+// Test hook: drop displayed-count state.
+export function resetMoreCounts(): void {
+  moreDisplayCache.clear();
+}
+
 export function buildIntervalBands<T extends Interval = Interval>(
   opts: IntervalBandOptions<T>,
 ): Layer[] {
@@ -513,34 +623,60 @@ export function buildIntervalBands<T extends Interval = Interval>(
   // screen. The always-on period band (half = 0) is unbounded and never
   // collapses (its sub-pixel spans are just dropped rather than summarized).
   const collapsible = band.half > 0;
+  const capacity = Math.max(2, 2 * (Math.floor((band.half - thickness - 6) / 16) + 1));
   const budget = collapsible
-    ? Math.min(BUDGET_BANDS, Math.max(2, Math.floor(band.half / 8)))
+    ? Math.min(capacity, BUDGET_BANDS, Math.max(2, Math.floor(band.half / 8)))
     : Infinity;
 
   const sorted = [...visible].sort(
     (a, b) => (b.interval.significance ?? 0) - (a.interval.significance ?? 0),
   );
+
+  // Kept-set hysteresis: incumbents survive a few ranks past the budget, so
+  // the re-pack below sees a stable input while panning and surviving bands
+  // keep their sub-lanes instead of reshuffling.
+  const prevKept = keptMemory.get(id) ?? null;
+  const keptIds = selectKeptIds(
+    sorted.map((v) => ({
+      id: v.interval.id,
+      readable: (v.c1 - v.c0) * timeScale >= MIN_BAND_LABEL_PX,
+    })),
+    prevKept,
+    budget,
+    collapsible ? Math.min(KEPT_BUDGET_SLACK, Math.max(0, capacity - budget)) : 0,
+  );
+  if (collapsible) keptMemory.set(id, keptIds);
+
   const individual: typeof visible = [];
   const collapsed: typeof visible = [];
   for (const v of sorted) {
-    const readable = (v.c1 - v.c0) * timeScale >= MIN_BAND_LABEL_PX;
-    if (readable && individual.length < budget) individual.push(v);
+    if (keptIds.has(v.interval.id)) individual.push(v);
     else if (collapsible) collapsed.push(v);
   }
 
   // Re-pack the kept intervals into a compact swimlane (time-ordered) so they
   // stack tightly instead of keeping their scattered sub-lane indices from the
-  // full, pre-assigned set.
+  // full, pre-assigned set. Packing is order-stable: survivors keep their
+  // previous sub-lane whenever it is still conflict-free, so the edge
+  // enter/exit churn of panning doesn't reshuffle on-screen bands.
+  const prevLaneMap = (collapsible ? laneMemory.get(id) : null) ?? null;
   const laneById = new Map<string, number>();
-  for (const { interval, lane } of assignIntervalLanes(
+  for (const { interval, lane } of assignStableLanes(
     individual.map((v) => v.interval),
+    prevLaneMap,
   )) {
     laneById.set(interval.id, lane);
   }
+  if (collapsible) laneMemory.set(id, laneById);
+
+  // Use the collision-free packed positions directly. Interpolating only on
+  // layer rebuilds can leave bands overlapping when the viewport stops moving.
+  const packedOffset = (intervalId: string) =>
+    band.center + laneOffset(laneById.get(intervalId) ?? 0, thickness);
 
   // Individual bands (full color, stacked into sub-lanes).
   const bandData = individual.map(({ interval, c0, c1 }) => {
-    const off = band.center + laneOffset(laneById.get(interval.id) ?? 0, thickness);
+    const off = packedOffset(interval.id);
     return {
       polygon: bandPolygon(c0, c1, off, thickness, orientation),
       estimated: interval.estimated,
@@ -569,7 +705,7 @@ export function buildIntervalBands<T extends Interval = Interval>(
       coord = lo >= hi ? (vMin + vMax) / 2 : Math.min(Math.max(coord, lo), hi);
     }
 
-    const off = band.center + laneOffset(laneById.get(interval.id) ?? 0, thickness);
+    const off = packedOffset(interval.id);
     labelCandidates.push({
       id: `${id}:${interval.id}`,
       text: displayTitle,
@@ -665,7 +801,7 @@ export function buildIntervalBands<T extends Interval = Interval>(
       const aggregate: AggregateInfo = {
         startYear: coordToYear(stripLo, scale),
         endYear: coordToYear(stripHi, scale),
-        count: collapsed.length,
+        count: displayedMoreCount(id, collapsed.length),
         names,
         unitNoun,
       };
@@ -679,7 +815,7 @@ export function buildIntervalBands<T extends Interval = Interval>(
           (stripLo + stripHi) / 2,
           orientation === "horizontal" ? off : off + thickness / 2 + 5,
         ),
-        text: `~${collapsed.length.toLocaleString("en-US")}+ more`,
+        text: `~${aggregate.count.toLocaleString("en-US")}+ more`,
         anchor,
         baseline: "center",
         color: labelColor,

@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "fetch:on-this-day": "node scripts/fetch-on-this-day.mjs"
+    "fetch:on-this-day": "node scripts/fetch-on-this-day.mjs",
+    "test": "node --require ./tests/register-typescript.cjs --test tests/*.test.cjs"
   },
   "dependencies": {
     "@deck.gl/core": "^9.3.10",

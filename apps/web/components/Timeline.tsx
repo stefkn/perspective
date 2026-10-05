@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import DeckGL from "@deck.gl/react";
 import { OrthographicView } from "@deck.gl/core";
 import {
@@ -28,6 +28,7 @@ import {
 } from "./lane-layers";
 import {
   computeOtdLabelLanes,
+  selectOtdLabelEvents,
   otdDotSpreadPx,
   otdPerpOffset,
   otdTimeShiftPx,
@@ -54,31 +55,6 @@ const ON_THIS_DAY_LABEL_EDGE_MARGIN = 120;
 const ON_THIS_DAY_DOT_MARGIN = 48;
 
 const LABEL_ANGLE_DEG = 45;
-
-// Cap the number of on-this-day labels shown at once: at century-level zooms
-// the visible range holds thousands of events, so a dense label cloud is
-// unreadable. Keep a deterministic subset keyed on each event's id, so the
-// chosen labels stay put while panning instead of reshuffling every frame.
-function hashString(text: string): number {
-  let h = 2166136261;
-  for (let i = 0; i < text.length; i++) {
-    h ^= text.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
-  return h >>> 0;
-}
-
-function sampleOtdLabelEvents(
-  events: TimelineEvent[],
-  count: number,
-): TimelineEvent[] {
-  if (events.length <= count) return events;
-  return events
-    .map((event, index) => ({ event, index, hash: hashString(event.id) }))
-    .sort((a, b) => a.hash - b.hash || a.index - b.index)
-    .slice(0, count)
-    .map((entry) => entry.event);
-}
 
 interface TimelineProps {
   events: TimelineEvent[];
@@ -193,10 +169,19 @@ export default function Timeline({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onThisDayEvents, visibleCoordRange, scale, selectedEvent, viewState.zoomX, viewState.zoomY, orientation]);
 
+  // Only committed selections become the previous frame's label set.
+  const prevOtdLabelIdsRef = useRef<Set<string> | null>(null);
   const otdLabelEvents = useMemo(
-    () => sampleOtdLabelEvents(onThisDayVisibleEvents, otdLabelSampleCount),
+    () => selectOtdLabelEvents(
+      onThisDayVisibleEvents,
+      prevOtdLabelIdsRef.current,
+      otdLabelSampleCount,
+    ),
     [onThisDayVisibleEvents, otdLabelSampleCount],
   );
+  useEffect(() => {
+    prevOtdLabelIdsRef.current = new Set(otdLabelEvents.map((event) => event.id));
+  }, [otdLabelEvents]);
 
   const otdLabelLanes = useMemo(() => {
     if (!showOtdLabels || otdLabelEvents.length === 0) {
