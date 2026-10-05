@@ -7,6 +7,7 @@ import {
   LANE_SIZES,
   LANE_SIZE_HALF,
   MAIN_AXIS_ID,
+  isContinuousLane,
   type LaneConfig,
   type LaneDefinition,
   type LaneId,
@@ -19,6 +20,7 @@ interface LaneTogglesProps {
   items: LaneItem[];
   configs: Record<LaneId, LaneConfig>;
   onToggle: (id: LaneId) => void;
+  onToggleBackdrop: (id: LaneId) => void;
   onReorder: (item: LaneItem, toIndex: number) => void;
   onSetHalf: (id: LaneId, half: number) => void;
 }
@@ -48,6 +50,7 @@ export default function LaneToggles({
   items,
   configs,
   onToggle,
+  onToggleBackdrop,
   onReorder,
   onSetHalf,
 }: LaneTogglesProps) {
@@ -150,6 +153,9 @@ export default function LaneToggles({
       {open && (
         <div className="lane-toggles-panel">
           <div className="lane-toggles-heading">Manage lanes</div>
+          <div className="lane-toggles-hint">
+            BG shows a continuous lane behind the timeline instead of as a band.
+          </div>
           {items.map((item, index) => {
             const dragging = dragId === item;
 
@@ -184,6 +190,7 @@ export default function LaneToggles({
             const lane = byId.get(item);
             if (!lane) return null;
             const cfg = configs[item];
+            const continuous = isContinuousLane(lane);
             return (
               <div
                 key={item}
@@ -213,10 +220,31 @@ export default function LaneToggles({
                 <span className="lane-row-title" title={lane.title}>
                   {lane.title}
                 </span>
+                {continuous && (
+                  <button
+                    type="button"
+                    className={`lane-row-backdrop${cfg.background ? " active" : ""}`}
+                    aria-pressed={cfg.background}
+                    aria-label={
+                      cfg.background
+                        ? `${lane.title}: showing as backdrop, switch back to a lane band`
+                        : `${lane.title}: show as backdrop behind the timeline`
+                    }
+                    title={
+                      cfg.background
+                        ? "Showing as backdrop — click to restore as a lane band"
+                        : "Show as backdrop behind the timeline (full height, shared)"
+                    }
+                    onClick={() => onToggleBackdrop(item)}
+                  >
+                    BG
+                  </button>
+                )}
                 <div
-                  className="lane-row-size"
+                  className={`lane-row-size${cfg.background ? " disabled" : ""}`}
                   role="group"
                   aria-label={`${lane.title} size`}
+                  aria-disabled={cfg.background || undefined}
                 >
                   <input
                     type="range"
@@ -225,6 +253,7 @@ export default function LaneToggles({
                     max={LANE_HALF_MAX}
                     step={4}
                     value={cfg.half}
+                    disabled={cfg.background}
                     aria-label={`${lane.title} size`}
                     onChange={(e) => onSetHalf(item, Number(e.target.value))}
                   />
@@ -236,7 +265,12 @@ export default function LaneToggles({
                         cfg.half === LANE_SIZE_HALF[size] ? " active" : ""
                       }`}
                       aria-label={`${lane.title}: ${size}`}
-                      title={size}
+                      title={
+                        cfg.background
+                          ? "Lane size applies to lane bands, not the backdrop"
+                          : size
+                      }
+                      disabled={cfg.background}
                       onClick={() => onSetHalf(item, LANE_SIZE_HALF[size])}
                     >
                       {SIZE_LABEL[size]}

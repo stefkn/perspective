@@ -1,5 +1,5 @@
 import type { Layer } from "@deck.gl/core";
-import { LineLayer, PathLayer, PolygonLayer, TextLayer } from "@deck.gl/layers";
+import { LineLayer, PathLayer, PolygonLayer, ScatterplotLayer, TextLayer } from "@deck.gl/layers";
 import { PathStyleExtension } from "@deck.gl/extensions";
 import {
   yearToCoord,
@@ -17,6 +17,7 @@ import {
   type Interval,
   type LaneBand,
   type LaneDefinition,
+  type LaneId,
   type SeriesData,
 } from "../lib/lanes";
 import {
@@ -36,6 +37,7 @@ import {
   GDP_MIN,
   GDP_MAX,
   formatGDP,
+  interpolateSeries,
 } from "../lib/datasets";
 import {
   ENERGY,
@@ -1432,4 +1434,596 @@ export function buildPeriodBands(opts: LaneOptions): Layer[] {
     visibleCoordRange,
     visiblePerpRange,
   });
+}
+
+// ---------------------------------------------------------------------------
+// Backdrop: continuous lanes rendered as faint full-viewport graphs behind the
+// main axis, sharing the screen instead of consuming stacked-lane space.
+// ---------------------------------------------------------------------------
+
+export interface BackdropOptions extends LaneOptions {
+  // Lane currently emphasized (pinned focus, or transient chip hover). Null
+  // means all slices render at the default faint level.
+  focusedId: LaneId | null;
+}
+
+interface BackdropSlice {
+  lane: LaneDefinition;
+  lo: number;
+  hi: number;
+}
+
+// Gap between adjacent backdrop slices, in world units (= screen px, since the
+// perpendicular zoom is always 0).
+const BACKDROP_GAP = 10;
+// Inset inside each slice keeping the curve off the slice edge / separator.
+const BACKDROP_PAD = 12;
+
+// Split the visible perpendicular range into equal slices, one per backdrop
+// lane, in the given lane order. Viewport-locked (derived from the visible
+// range each frame), so the backdrop always fills the screen and never needs
+// perpendicular panning.
+function layoutBackdropSlices(
+  lanes: LaneDefinition[],
+  visiblePerpRange: [number, number],
+): BackdropSlice[] {
+  const n = lanes.length;
+  if (n === 0) return [];
+  const [vLo, vHi] = visiblePerpRange;
+  const total = vHi - vLo;
+  if (total <= 0) return [];
+  const sliceH = (total - BACKDROP_GAP * (n - 1)) / n;
+  if (sliceH <= 4) return [];
+  return lanes.map((lane, i) => {
+    const lo = vLo + i * (sliceH + BACKDROP_GAP);
+    return { lane, lo, hi: lo + sliceH };
+  });
+}
+
+// Opacity budget for the backdrop. Default is deliberately faint so interval
+// bands and event dots (drawn later, fully opaque) keep visual priority; the
+// focused slice steps up to near-lane strength while the rest dim further.
+function backdropAlphas(focusedId: LaneId | null, laneId: LaneId): {
+  wash: number;
+  area: number;
+  line: number;
+  width: number;
+  polyFill: number;
+  polyLine: number;
+  label: number;
+} {
+  if (focusedId == null) {
+    return { wash: 8, area: 24, line: 150, width: 2, polyFill: 60, polyLine: 120, label: 150 };
+  }
+  if (focusedId === laneId) {
+    return { wash: 16, area: 60, line: 255, width: 3, polyFill: 130, polyLine: 220, label: 230 };
+  }
+  return { wash: 5, area: 10, line: 60, width: 1.5, polyFill: 30, polyLine: 60, label: 80 };
+}
+
+// Full-slice rectangle as a 2D polygon for wash / hit layers.
+function backdropRect(
+  t0: number,
+  t1: number,
+  lo: number,
+  hi: number,
+  orientation: Orientation,
+): [number, number][] {
+  if (orientation === "horizontal") {
+    return [
+      [t0, lo],
+      [t1, lo],
+      [t1, hi],
+      [t0, hi],
+    ];
+  }
+  return [
+    [lo, -t1],
+    [hi, -t1],
+    [hi, -t0],
+    [lo, -t0],
+  ];
+}
+
+// Perpendicular position of a normalized [0, 1] value inside a backdrop
+// slice. Conventional chart direction: larger values toward the top of the
+// screen when horizontal, toward the right when vertical.
+function sliceFractionPerp(
+  lo: number,
+  hi: number,
+  fraction: number,
+  orientation: Orientation,
+): number {
+  const sliceH = hi - lo;
+  const pad = Math.min(BACKDROP_PAD, sliceH * 0.15);
+  if (orientation === "horizontal") {
+    return hi - pad - fraction * (sliceH - 2 * pad);
+  }
+  return lo + pad + fraction * (sliceH - 2 * pad);
+}
+
+function buildBackdropSeriesSlice(
+  slice: BackdropSlice,
+  cfg: SeriesLaneData,
+  color: [number, number, number],
+  opts: BackdropOptions,
+): Layer[] {
+  const { lane, lo, hi } = slice;
+  const { orientation, scale } = opts;
+  const alphas = backdropAlphas(opts.focusedId, lane.id);
+  const sliceH = hi - lo;
+  const pad = Math.min(BACKDROP_PAD, sliceH * 0.15);
+
+  const perpFor = (value: number) =>
+    sliceFractionPerp(
+      lo,
+      hi,
+      valueToFraction(value, cfg.min, cfg.max, scale),
+      orientation,
+    );
+
+  const firstRealIndex = cfg.data.findIndex((p) => !p.estimated);
+  const realPoints = firstRealIndex > 0 ? cfg.data.slice(firstRealIndex) : cfg.data;
+  const estimatedPoints =
+    firstRealIndex > 0 ? [...cfg.data.slice(0, firstRealIndex), realPoints[0]] : [];
+
+  const path: [number, number, number][] = realPoints.map((p) =>
+    timeOffset(yearToCoord(p.year, scale), perpFor(p.value), orientation),
+  );
+  const estimatedPath: [number, number, number][] = estimatedPoints.map((p) =>
+    timeOffset(yearToCoord(p.year, scale), perpFor(p.value), orientation),
+  );
+
+  const xy = (coord: number, perp: number): [number, number] => {
+    const [x, y] = timeOffset(coord, perp, orientation);
+    return [x, y];
+  };
+  const baseline = orientation === "horizontal" ? hi - pad : lo + pad;
+  const areaPolygon: [number, number][] = [
+    xy(yearToCoord(realPoints[0].year, scale), baseline),
+    ...realPoints.map((p) => xy(yearToCoord(p.year, scale), perpFor(p.value))),
+    xy(yearToCoord(realPoints[realPoints.length - 1].year, scale), baseline),
+  ];
+
+  const lineColor: [number, number, number, number] = [color[0], color[1], color[2], alphas.line];
+  const areaColor: [number, number, number, number] = [color[0], color[1], color[2], alphas.area];
+  const labelColor: [number, number, number, number] = [color[0], color[1], color[2], alphas.label];
+
+  // In-canvas labels are secondary (the HTML chips carry the crisp readout);
+  // keep them small and faint: title at the deep-past edge inside the slice,
+  // min/max at the curve endpoints.
+  const titleTime = titleTimeCoord(opts.coordExtent, opts.visibleCoordRange);
+  const firstCoord = yearToCoord(realPoints[0].year, scale);
+  const lastCoord = yearToCoord(realPoints[realPoints.length - 1].year, scale);
+  const titlePerp =
+    orientation === "horizontal" ? lo + pad + 6 : hi - pad - 6;
+  const titles: LaneLabel[] = [
+    {
+      position: timeOffset(titleTime, titlePerp, orientation),
+      text: lane.title,
+      anchor: orientation === "horizontal" ? "start" : "end",
+      baseline: orientation === "horizontal" ? "top" : "bottom",
+      color: labelColor,
+    },
+    {
+      position: timeOffset(
+        lastCoord,
+        orientation === "horizontal" ? lo + pad + 6 : hi - pad - 6,
+        orientation,
+      ),
+      text: cfg.format(cfg.max),
+      anchor: "end",
+      baseline: orientation === "horizontal" ? "top" : "top",
+      color: labelColor,
+    },
+    {
+      position: timeOffset(
+        firstCoord,
+        orientation === "horizontal" ? hi - pad - 6 : lo + pad + 6,
+        orientation,
+      ),
+      text: cfg.format(cfg.min),
+      anchor: "start",
+      baseline: orientation === "horizontal" ? "bottom" : "bottom",
+      color: labelColor,
+    },
+  ];
+
+  const layers: Layer[] = [
+    new PolygonLayer({
+      id: `backdrop-${lane.id}-area`,
+      data: [{ polygon: areaPolygon }],
+      getPolygon: (d) => d.polygon,
+      filled: true,
+      getFillColor: areaColor,
+      pickable: false,
+      parameters: { depthTest: false },
+    }),
+    new PathLayer({
+      id: `backdrop-${lane.id}-line`,
+      data: [{ path }],
+      getPath: (d) => d.path,
+      getColor: lineColor,
+      widthUnits: "pixels",
+      getWidth: alphas.width,
+      pickable: false,
+      parameters: { depthTest: false },
+    }),
+  ];
+  if (estimatedPath.length > 0) {
+    layers.push(
+      new PathLayer({
+        id: `backdrop-${lane.id}-estimated`,
+        data: [{ path: estimatedPath }],
+        getPath: (d) => d.path,
+        getColor: [color[0], color[1], color[2], Math.max(alphas.line - 20, 40)],
+        widthUnits: "pixels",
+        getWidth: alphas.width,
+        extensions: [DASH_EXTENSION],
+        getDashArray: [6, 4] as [number, number],
+        pickable: false,
+        parameters: { depthTest: false },
+      }),
+    );
+  }
+  layers.push(
+    new TextLayer({
+      id: `backdrop-${lane.id}-labels`,
+      data: titles,
+      getPosition: (d) => d.position,
+      getText: (d) => d.text,
+      getTextAnchor: (d) => d.anchor,
+      getAlignmentBaseline: (d) => d.baseline,
+      getColor: (d) => d.color ?? labelColor,
+      sizeUnits: "pixels",
+      getSize: 10,
+      fontFamily: MONO,
+      pickable: false,
+      parameters: { depthTest: false },
+    }),
+  );
+  return layers;
+}
+
+function buildBackdropEnergySlice(
+  slice: BackdropSlice,
+  opts: BackdropOptions,
+): Layer[] {
+  const { lane, lo, hi } = slice;
+  const { orientation, scale } = opts;
+  const alphas = backdropAlphas(opts.focusedId, lane.id);
+  const sliceH = hi - lo;
+  const pad = Math.min(BACKDROP_PAD, sliceH * 0.15);
+
+  const perpFor = (value: number) =>
+    sliceFractionPerp(
+      lo,
+      hi,
+      valueToFraction(value, ENERGY_MIN, ENERGY_MAX, scale),
+      orientation,
+    );
+  const totalOf = (p: EnergyPoint) =>
+    ENERGY_SOURCES.reduce((sum, s) => sum + p.values[s.id], 0);
+
+  const xy = (coord: number, perp: number): [number, number] => {
+    const [x, y] = timeOffset(coord, perp, orientation);
+    return [x, y];
+  };
+
+  const polygons: {
+    polygon: [number, number][];
+    fill: [number, number, number, number];
+    line: [number, number, number, number];
+  }[] = [];
+  for (let si = 0; si < ENERGY_SOURCES.length; si++) {
+    const source = ENERGY_SOURCES[si];
+    for (let i = 0; i < ENERGY.length - 1; i++) {
+      const a = ENERGY[i];
+      const b = ENERGY[i + 1];
+      let bottomA = 0;
+      let bottomB = 0;
+      for (let j = 0; j < si; j++) {
+        bottomA += a.values[ENERGY_SOURCES[j].id];
+        bottomB += b.values[ENERGY_SOURCES[j].id];
+      }
+      const topA = bottomA + a.values[source.id];
+      const topB = bottomB + b.values[source.id];
+      if (topA <= 0 && topB <= 0) continue;
+      polygons.push({
+        polygon: [
+          xy(yearToCoord(a.year, scale), perpFor(topA)),
+          xy(yearToCoord(b.year, scale), perpFor(topB)),
+          xy(yearToCoord(b.year, scale), perpFor(bottomB)),
+          xy(yearToCoord(a.year, scale), perpFor(bottomA)),
+        ],
+        fill: [source.color[0], source.color[1], source.color[2], alphas.polyFill],
+        line: [source.color[0], source.color[1], source.color[2], alphas.polyLine],
+      });
+    }
+  }
+
+  const firstRealIndex = ENERGY.findIndex((p) => !p.estimated);
+  const estimatedPath: [number, number, number][] =
+    firstRealIndex > 0
+      ? [...ENERGY.slice(0, firstRealIndex), ENERGY[firstRealIndex]].map((p) =>
+          timeOffset(yearToCoord(p.year, scale), perpFor(totalOf(p)), orientation),
+        )
+      : [];
+
+  const titleTime = titleTimeCoord(opts.coordExtent, opts.visibleCoordRange);
+  const lastCoord = yearToCoord(ENERGY[ENERGY.length - 1].year, scale);
+  const labelColor: [number, number, number, number] = [220, 220, 230, alphas.label];
+  const labels: LaneLabel[] = [
+    {
+      position: timeOffset(
+        titleTime,
+        orientation === "horizontal" ? lo + pad + 6 : hi - pad - 6,
+        orientation,
+      ),
+      text: "Primary energy",
+      anchor: orientation === "horizontal" ? "start" : "end",
+      baseline: orientation === "horizontal" ? "top" : "bottom",
+    },
+    {
+      position: timeOffset(
+        lastCoord,
+        orientation === "horizontal" ? lo + pad + 6 : hi - pad - 6,
+        orientation,
+      ),
+      text: formatEnergy(ENERGY_MAX),
+      anchor: "end",
+      baseline: orientation === "horizontal" ? "top" : "top",
+    },
+  ];
+
+  const layers: Layer[] = [
+    new PolygonLayer({
+      id: "backdrop-energy-bands",
+      data: polygons,
+      getPolygon: (d) => d.polygon,
+      filled: true,
+      getFillColor: (d) => d.fill,
+      stroked: true,
+      getLineColor: (d) => d.line,
+      getLineWidth: 1,
+      lineWidthMinPixels: 1,
+      pickable: false,
+      parameters: { depthTest: false },
+    }),
+  ];
+  if (estimatedPath.length > 0) {
+    layers.push(
+      new PathLayer({
+        id: "backdrop-energy-estimated",
+        data: [{ path: estimatedPath }],
+        getPath: (d) => d.path,
+        getColor: [220, 220, 230, Math.max(alphas.label - 20, 40)],
+        widthUnits: "pixels",
+        getWidth: 2,
+        extensions: [DASH_EXTENSION],
+        getDashArray: [6, 4] as [number, number],
+        pickable: false,
+        parameters: { depthTest: false },
+      }),
+    );
+  }
+  layers.push(
+    new TextLayer({
+      id: "backdrop-energy-labels",
+      data: labels,
+      getPosition: (d) => d.position,
+      getText: (d) => d.text,
+      getTextAnchor: (d) => d.anchor,
+      getAlignmentBaseline: (d) => d.baseline,
+      getColor: labelColor,
+      sizeUnits: "pixels",
+      getSize: 10,
+      fontFamily: MONO,
+      pickable: false,
+      parameters: { depthTest: false },
+    }),
+  );
+  return layers;
+}
+
+// Build faint full-viewport backdrop layers for the given continuous lanes.
+// Slices divide the visible perpendicular range equally, in lane order. Render
+// these layers first (bottom) so interval bands and events stay on top.
+export function buildBackdropLayers(
+  lanes: LaneDefinition[],
+  opts: BackdropOptions,
+): Layer[] {
+  if (lanes.length === 0 || !opts.visiblePerpRange) return [];
+  const [vLo, vHi] = opts.visiblePerpRange;
+  // Clamp the time span to what is on screen so hit/wash rects stay bounded.
+  const t0 = opts.visibleCoordRange
+    ? Math.max(opts.coordExtent[0], opts.visibleCoordRange[0])
+    : opts.coordExtent[0];
+  const t1 = opts.visibleCoordRange
+    ? Math.min(opts.coordExtent[1], opts.visibleCoordRange[1])
+    : opts.coordExtent[1];
+  if (t1 <= t0) return [];
+
+  const slices = layoutBackdropSlices(lanes, [vLo, vHi]);
+  if (slices.length === 0) return [];
+
+  const layers: Layer[] = [
+    // Invisible full-slice hit areas: guarantee a pickable target (and thus a
+    // world coordinate for the value probe) everywhere over the backdrop, even
+    // where no curve fill reaches.
+    new PolygonLayer({
+      id: "backdrop-hit",
+      data: slices.map((s) => ({
+        polygon: backdropRect(t0, t1, s.lo, s.hi, opts.orientation),
+        laneId: s.lane.id,
+      })),
+      getPolygon: (d) => d.polygon,
+      filled: true,
+      getFillColor: [0, 0, 0, 0],
+      stroked: false,
+      pickable: true,
+      parameters: { depthTest: false },
+    }),
+    // Whisper of lane color across each slice so slice extents read even where
+    // the curve is flat at the bottom.
+    new PolygonLayer({
+      id: "backdrop-wash",
+      data: slices.map((s) => {
+        const c = s.lane.color;
+        const a = backdropAlphas(opts.focusedId, s.lane.id);
+        return {
+          polygon: backdropRect(t0, t1, s.lo, s.hi, opts.orientation),
+          fill: [c[0], c[1], c[2], a.wash] as [number, number, number, number],
+        };
+      }),
+      getPolygon: (d) => d.polygon,
+      filled: true,
+      getFillColor: (d) => d.fill,
+      stroked: false,
+      pickable: false,
+      parameters: { depthTest: false },
+    }),
+  ];
+
+  for (const slice of slices) {
+    if (slice.lane.kind === "stacked") {
+      layers.push(...buildBackdropEnergySlice(slice, opts));
+      continue;
+    }
+    const cfg = SERIES_DATA[slice.lane.id];
+    if (!cfg) continue;
+    layers.push(
+      ...buildBackdropSeriesSlice(slice, cfg, slice.lane.color, opts),
+    );
+  }
+
+  if (slices.length > 1) {
+    const bounds = slices
+      .slice(0, -1)
+      .map((s, i) => (s.hi + slices[i + 1].lo) / 2);
+    layers.push(
+      new LineLayer({
+        id: "backdrop-separators",
+        data: bounds.map((perp) => {
+          if (opts.orientation === "horizontal") {
+            return { source: [t0, perp, 0] as [number, number, number], target: [t1, perp, 0] as [number, number, number] };
+          }
+          return { source: [perp, -t0, 0] as [number, number, number], target: [perp, -t1, 0] as [number, number, number] };
+        }),
+        getSourcePosition: (d) => d.source,
+        getTargetPosition: (d) => d.target,
+        getColor: [138, 147, 166, 40],
+        widthUnits: "pixels",
+        getWidth: 1,
+        pickable: false,
+        parameters: { depthTest: false },
+      }),
+    );
+  }
+
+  return layers;
+}
+
+const PROBE_LINE_COLOR: [number, number, number, number] = [127, 209, 255, 150];
+
+// Marker layers for the active backdrop probe (hover or pinned year): a faint
+// hairline across the viewport at the probed time plus one dot per slice on
+// its curve, so the chip/tooltip values are visibly anchored to the graph.
+export function buildBackdropProbeLayers(
+  lanes: LaneDefinition[],
+  year: number,
+  opts: BackdropOptions,
+): Layer[] {
+  if (lanes.length === 0) return [];
+  if (!opts.visiblePerpRange || !opts.visibleCoordRange) return [];
+  const { orientation, scale } = opts;
+  const [vLo, vHi] = opts.visiblePerpRange;
+  if (vHi <= vLo) return [];
+
+  const coord = yearToCoord(year, scale);
+  const line =
+    orientation === "horizontal"
+      ? {
+          source: [coord, vLo, 0] as [number, number, number],
+          target: [coord, vHi, 0] as [number, number, number],
+        }
+      : {
+          source: [vLo, -coord, 0] as [number, number, number],
+          target: [vHi, -coord, 0] as [number, number, number],
+        };
+
+  const slices = layoutBackdropSlices(lanes, [vLo, vHi]);
+  const dots: {
+    position: [number, number, number];
+    fill: [number, number, number, number];
+  }[] = [];
+  for (const slice of slices) {
+    let fraction: number | null = null;
+    let color: [number, number, number] = slice.lane.color;
+    if (slice.lane.kind === "stacked") {
+      // Interpolate the rendered coordinates, so markers stay on the path
+      // when either axis is logarithmic.
+      fraction = interpolateSeries(
+        ENERGY.map((point) => ({
+          year: yearToCoord(point.year, scale),
+          value: valueToFraction(
+            ENERGY_SOURCES.reduce((sum, source) => sum + point.values[source.id], 0),
+            ENERGY_MIN,
+            ENERGY_MAX,
+            scale,
+          ),
+        })),
+        coord,
+      ).value;
+      color = [240, 240, 245];
+    } else {
+      const cfg = SERIES_DATA[slice.lane.id];
+      if (!cfg) continue;
+      fraction = interpolateSeries(
+        cfg.data.map((point) => ({
+          year: yearToCoord(point.year, scale),
+          value: valueToFraction(point.value, cfg.min, cfg.max, scale),
+        })),
+        coord,
+      ).value;
+    }
+    dots.push({
+      position: timeOffset(
+        coord,
+        sliceFractionPerp(slice.lo, slice.hi, fraction, orientation),
+        orientation,
+      ),
+      fill: [color[0], color[1], color[2], 255],
+    });
+  }
+
+  return [
+    new LineLayer({
+      id: "backdrop-probe-line",
+      data: [line],
+      getSourcePosition: (d) => d.source,
+      getTargetPosition: (d) => d.target,
+      getColor: PROBE_LINE_COLOR,
+      widthUnits: "pixels",
+      getWidth: 1.5,
+      extensions: [DASH_EXTENSION],
+      getDashArray: [4, 4] as [number, number],
+      pickable: false,
+      parameters: { depthTest: false },
+    }),
+    new ScatterplotLayer({
+      id: "backdrop-probe-dots",
+      data: dots,
+      getPosition: (d) => d.position,
+      getFillColor: (d) => d.fill,
+      getLineColor: [10, 13, 20],
+      stroked: true,
+      getLineWidth: 1.5,
+      lineWidthMinPixels: 1.5,
+      radiusUnits: "pixels",
+      getRadius: 5,
+      pickable: false,
+      parameters: { depthTest: false },
+    }),
+  ];
 }
