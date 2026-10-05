@@ -260,3 +260,43 @@ export function computeOtdLabelLanes(
 
   return lanes;
 }
+
+// Deterministic id hash (FNV-1a) for stable subset selection.
+export function hashString(text: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+// Cap the number of on-this-day labels shown at once: at century-level zooms
+// the visible range holds thousands of events, so a dense label cloud is
+// unreadable. Pure function; the caller carries `prevIds` (the previous
+// frame's selection) across frames. Previously visible labels survive as long
+// as they are still visible, so panning only changes the set at the viewport
+// edges instead of reshuffling the whole subset every frame; freed slots fill
+// deterministically by hash rank.
+export function selectOtdLabelEvents(
+  visible: TimelineEvent[],
+  prevIds: Set<string> | null,
+  count: number,
+): TimelineEvent[] {
+  if (visible.length <= count) return visible;
+  const ranked = visible
+    .map((event, index) => ({ event, index, hash: hashString(event.id) }))
+    .sort((a, b) => a.hash - b.hash || a.index - b.index);
+  if (!prevIds || prevIds.size === 0) {
+    return ranked.slice(0, count).map((entry) => entry.event);
+  }
+  const kept = ranked.filter((entry) => prevIds.has(entry.event.id));
+  if (kept.length >= count) {
+    return kept.slice(0, count).map((entry) => entry.event);
+  }
+  const keptIds = new Set(kept.map((entry) => entry.event.id));
+  const fill = ranked
+    .filter((entry) => !keptIds.has(entry.event.id))
+    .slice(0, count - kept.length);
+  return [...kept, ...fill].map((entry) => entry.event);
+}

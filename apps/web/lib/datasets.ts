@@ -1,5 +1,35 @@
 import type { SeriesData } from "./lanes";
 
+// Linear interpolation of a yearly series at an arbitrary (possibly
+// fractional) year. Clamps to the edge values outside the data range.
+// `estimated` is true while the year predates the first measured point.
+export function interpolateSeries(
+  data: SeriesData,
+  year: number,
+): { value: number; estimated: boolean } {
+  if (data.length === 0) return { value: 0, estimated: true };
+  const firstReal = data.find((p) => !p.estimated);
+  const firstRealYear = firstReal?.year ?? Infinity;
+  if (year <= data[0].year) {
+    return { value: data[0].value, estimated: year < firstRealYear };
+  }
+  const last = data[data.length - 1];
+  if (year >= last.year) return { value: last.value, estimated: year < firstRealYear };
+  for (let i = 0; i < data.length - 1; i++) {
+    const a = data[i];
+    const b = data[i + 1];
+    if (year >= a.year && year <= b.year) {
+      const span = b.year - a.year;
+      const t = span > 0 ? (year - a.year) / span : 0;
+      return {
+        value: a.value + (b.value - a.value) * t,
+        estimated: year < firstRealYear,
+      };
+    }
+  }
+  return { value: last.value, estimated: year < firstRealYear };
+}
+
 // World population estimates, aligned with Our World in Data's historical
 // population series (HYDE / UN sources). Values in people, trimmed to the
 // timeline's deep-time floor (3000 BCE).

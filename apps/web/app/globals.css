@@ -272,6 +272,10 @@ button {
   flex-shrink: 0;
 }
 
+.lane-row-size.disabled {
+  opacity: 0.35;
+}
+
 .lane-row-size-slider {
   width: 64px;
   accent-color: var(--accent);
@@ -300,10 +304,188 @@ button {
   border-color: var(--accent);
 }
 
+.lane-row-size-preset:disabled,
+.lane-row-size-slider:disabled {
+  cursor: default;
+}
+
 .lane-row-visible {
   accent-color: var(--accent);
   margin: 0;
   flex-shrink: 0;
+}
+
+.lane-toggles-hint {
+  padding: 0 8px 8px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+.lane-row-backdrop {
+  flex-shrink: 0;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  min-width: 28px;
+  height: 20px;
+  padding: 0 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1;
+  color: var(--muted);
+}
+
+.lane-row-backdrop:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.lane-row-backdrop.active {
+  color: #0b0e14;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.backdrop-panel {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 9;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 260px;
+  padding: 8px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(8px);
+}
+
+.backdrop-panel-heading {
+  padding: 0 4px 2px;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.backdrop-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 6px 10px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  text-align: left;
+}
+
+.backdrop-chip:hover {
+  border-color: var(--accent);
+}
+
+.backdrop-chip.focused {
+  border-color: var(--accent);
+  background: rgba(255, 209, 102, 0.08);
+}
+
+.backdrop-chip-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.backdrop-chip-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.backdrop-chip-value {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.backdrop-chip.focused .backdrop-chip-value {
+  color: var(--text);
+}
+
+.backdrop-tooltip {
+  position: absolute;
+  z-index: 11;
+  max-width: min(280px, calc(100% - 16px));
+  max-height: calc(100% - 16px);
+  overflow-y: auto;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(8px);
+  /* Never intercept taps: only the Dismiss button is interactive, so taps
+     on entities underneath the tooltip still reach the canvas. */
+  pointer-events: none;
+}
+
+.backdrop-tooltip-year {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent-2);
+  margin-bottom: 6px;
+}
+
+.backdrop-tooltip-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+  font-size: 12px;
+}
+
+.backdrop-tooltip-name {
+  flex: 1;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.backdrop-tooltip-value {
+  font-variant-numeric: tabular-nums;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.backdrop-tooltip-close {
+  margin-top: 6px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--text);
+  min-height: 36px;
+  pointer-events: auto;
+}
+
+.backdrop-tooltip-close:hover {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .timeline-stage {
@@ -385,7 +567,9 @@ button {
 .aggregate-tooltip {
   position: absolute;
   z-index: 11;
-  max-width: 280px;
+  max-width: min(280px, calc(100% - 16px));
+  max-height: calc(100% - 16px);
+  overflow-y: auto;
   background: var(--bg-panel);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -511,6 +695,27 @@ button {
 @media (max-width: 640px) {
   .app-header-hint {
     display: none;
+  }
+
+  .backdrop-panel {
+    top: 8px;
+    left: 8px;
+    right: 8px;
+    max-width: none;
+    flex-direction: row;
+    align-items: center;
+    overflow-x: auto;
+    padding: 6px;
+  }
+
+  .backdrop-panel-heading {
+    flex-shrink: 0;
+    padding: 6px 4px;
+    white-space: nowrap;
+  }
+
+  .backdrop-chip {
+    flex-shrink: 0;
   }
 
   .app-header {

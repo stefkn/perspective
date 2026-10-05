@@ -65,3 +65,68 @@ export function formatEnergy(value: number): string {
   if (value >= 1e3) return `${Math.round(value / 1e3)} k TWh`;
   return `${Math.round(value)} TWh`;
 }
+
+// Linear per-source interpolation of the stacked energy series at an
+// arbitrary (possibly fractional) year, plus the summed total. Clamps to the
+// edge values outside the data range. `estimated` is true while the year
+// predates the first measured point.
+export function interpolateEnergy(year: number): {
+  total: number;
+  values: Record<EnergySourceId, number>;
+  estimated: boolean;
+} {
+  const at = (idx: number): Record<EnergySourceId, number> => ({
+    ...ENERGY[idx].values,
+  });
+  const firstRealIndex = ENERGY.findIndex((p) => !p.estimated);
+  const firstRealYear =
+    firstRealIndex >= 0 ? ENERGY[firstRealIndex].year : Infinity;
+  const blend = (
+    a: Record<EnergySourceId, number>,
+    b: Record<EnergySourceId, number>,
+    t: number,
+  ): Record<EnergySourceId, number> => {
+    const out = {} as Record<EnergySourceId, number>;
+    for (const s of ENERGY_SOURCES) {
+      out[s.id] = a[s.id] + (b[s.id] - a[s.id]) * t;
+    }
+    return out;
+  };
+  if (year <= ENERGY[0].year) {
+    const values = at(0);
+    return {
+      total: ENERGY_SOURCES.reduce((sum, s) => sum + values[s.id], 0),
+      values,
+      estimated: year < firstRealYear,
+    };
+  }
+  const last = ENERGY[ENERGY.length - 1];
+  if (year >= last.year) {
+    const values = at(ENERGY.length - 1);
+    return {
+      total: ENERGY_SOURCES.reduce((sum, s) => sum + values[s.id], 0),
+      values,
+      estimated: year < firstRealYear,
+    };
+  }
+  for (let i = 0; i < ENERGY.length - 1; i++) {
+    const a = ENERGY[i];
+    const b = ENERGY[i + 1];
+    if (year >= a.year && year <= b.year) {
+      const span = b.year - a.year;
+      const t = span > 0 ? (year - a.year) / span : 0;
+      const values = blend(a.values, b.values, t);
+      return {
+        total: ENERGY_SOURCES.reduce((sum, s) => sum + values[s.id], 0),
+        values,
+        estimated: year < firstRealYear,
+      };
+    }
+  }
+  const values = at(ENERGY.length - 1);
+  return {
+    total: ENERGY_SOURCES.reduce((sum, s) => sum + values[s.id], 0),
+    values,
+    estimated: year < firstRealYear,
+  };
+}

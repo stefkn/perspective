@@ -143,10 +143,15 @@ export type LaneItem = LaneId | typeof MAIN_AXIS_ID;
 
 // Per-user, per-lane settings: visibility and how much perpendicular space it
 // gets (half-width in px). Side is derived from the lane's position relative
-// to MAIN_AXIS_ID.
+// to MAIN_AXIS_ID. `background` (continuous lanes only) moves the lane out of
+// the stacked band layout into the full-viewport backdrop behind the main
+// axis: it no longer consumes perpendicular layout space. A lane shows as a
+// backdrop only when `visible && background`; `visible` alone means the normal
+// stacked band, and `!visible` hides it entirely.
 export interface LaneConfig {
   visible: boolean;
   half: number;
+  background: boolean;
 }
 
 // Continuous perpendicular-size range, in px of half-width. The lower bound is
@@ -174,10 +179,21 @@ export const LANE_BY_ID: Record<LaneId, LaneDefinition> = Object.fromEntries(
   LANES.map((lane) => [lane.id, lane]),
 ) as Record<LaneId, LaneDefinition>;
 
+// Continuous (time-series) lanes are the only ones eligible for the backdrop:
+// a single value per year, renderable as a full-viewport graph behind the
+// main axis. Interval lanes (lifespans, wars, …) always stay in the stacked
+// band layout.
+export function isContinuousLane(lane: LaneDefinition): boolean {
+  return lane.kind === "series" || lane.kind === "stacked";
+}
+
 export function defaultLaneConfig(lane: LaneDefinition): LaneConfig {
   return {
     visible: lane.defaultVisible,
     half: LANE_SIZE_HALF["normal"],
+    // Continuous lanes default to the backdrop: it shows the same data
+    // without consuming stacked-band space. Interval lanes always use bands.
+    background: isContinuousLane(lane),
   };
 }
 

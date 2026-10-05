@@ -14,6 +14,7 @@ import type { TimelineEvent, EntityDetail } from "../lib/types";
 import {
   yearToCoord,
   coordToYear,
+  formatYear,
   PIXELS_PER_LINEAR_YEAR,
   type Orientation,
   type Scale,
@@ -26,6 +27,7 @@ import {
   visibleBounds,
   visibleTimeCoordRange,
   visibleYearSpan,
+  buildViewport,
   type TimeViewState,
 } from "../lib/view-state";
 import { computeLabelBoxes, resolveLabelTargets } from "../lib/labels";
@@ -39,11 +41,24 @@ import {
   MAIN_AXIS_ID,
   defaultLaneConfigs,
   defaultLaneItems,
+  isContinuousLane,
   layoutLaneBands,
   type LaneConfig,
   type LaneId,
   type LaneItem,
 } from "../lib/lanes";
+import {
+  CO2,
+  GDP,
+  LIFE_EXPECTANCY,
+  POPULATION,
+  formatCO2,
+  formatGDP,
+  formatLifeExpectancy,
+  formatPopulation,
+  interpolateSeries,
+} from "../lib/datasets";
+import { formatEnergy, interpolateEnergy } from "../lib/energy";
 import {
   loadOnThisDayEvents,
   OTD_DOT_SPAN_DAYS,
@@ -122,7 +137,10 @@ function loadLaneState(): {
           perpScale?: number;
         };
         if (typeof entry.visible === "boolean") configs[id].visible = entry.visible;
-        if (typeof entry.half === "number") {
+        if (typeof entry.background === "boolean") {
+          configs[id].background = entry.background;
+        }
+        if (typeof entry.half === "number" && Number.isFinite(entry.half)) {
           configs[id].half = Math.min(
             Math.max(entry.half, LANE_HALF_MIN),
             LANE_HALF_MAX,
@@ -133,7 +151,7 @@ function loadLaneState(): {
           entry.size === "large"
         ) {
           // Migrate the old size + perpScale pair into a single half-width.
-          const scale = typeof entry.perpScale === "number" ? entry.perpScale : 1;
+          const scale = typeof entry.perpScale === "number" && Number.isFinite(entry.perpScale) ? entry.perpScale : 1;
           configs[id].half = Math.min(
             Math.max(LANE_SIZE_HALF[entry.size] * scale, LANE_HALF_MIN),
             LANE_HALF_MAX,
@@ -143,6 +161,12 @@ function loadLaneState(): {
     }
   } catch {
     // Fall through to defaults on any parse error.
+  }
+
+  // The backdrop flag only ever applies to continuous lanes; drop it for
+  // interval lanes so a stale value can't hide them.
+  for (const lane of LANES) {
+    if (!isContinuousLane(lane)) configs[lane.id].background = false;
   }
 
   return { items, configs };
@@ -243,6 +267,18 @@ export default function TimelineApp() {
   const items = laneState.items;
   const configs = laneState.configs;
 
+  // Backdrop (full-viewport background graphs for continuous lanes).
+  const [focusedBackdrop, setFocusedBackdrop] = useState<LaneId | null>(null);
+  const [hoveredBackdropChip, setHoveredBackdropChip] = useState<LaneId | null>(null);
+  const [hoverSample, setHoverSample] = useState<{
+    probe: { x: number; y: number; year: number };
+    view: TimeViewState;
+  } | null>(null);
+  // Pinned probe is a year, not a screen point: its on-screen position is
+  // re-projected every frame so the tooltip tracks the graph while panning
+  // instead of freezing at the tap pixel.
+  const [pinnedYear, setPinnedYear] = useState<number | null>(null);
+
   const [perpOffset, setPerpOffset] = useState(0);
 
   const updateLane = useCallback(
@@ -257,6 +293,20 @@ export default function TimelineApp() {
 
   const toggleLane = useCallback(
     (id: LaneId) => updateLane(id, { visible: !configs[id].visible }),
+    [configs, updateLane],
+  );
+
+  // Move a continuous lane between the stacked band layout and the
+  // full-viewport backdrop. Enabling the backdrop implies visible.
+  const toggleBackdrop = useCallback(
+    (id: LaneId) => {
+      const next = !configs[id].background;
+      updateLane(id, {
+        background: next,
+        visible: next ? true : configs[id].visible,
+      });
+      setFocusedBackdrop((f) => (next ? f : f === id ? null : f));
+    },
     [configs, updateLane],
   );
 
@@ -296,11 +346,46 @@ export default function TimelineApp() {
       items
         .filter(
           (item): item is LaneId =>
-            item !== MAIN_AXIS_ID && configs[item].visible,
+            item !== MAIN_AXIS_ID &&
+            configs[item].visible &&
+            // The backdrop flag only applies to continuous lanes; interval
+            // lanes ignore it so a stale flag can never hide them entirely.
+            (!configs[item].background || !isContinuousLane(LANE_BY_ID[item])),
         )
         .map((id) => LANE_BY_ID[id]),
     [items, configs],
   );
+
+  // Continuous lanes opted into the backdrop, in manager order. These skip
+  // the stacked band layout entirely (freeing its perpendicular space) and
+  // share the full viewport behind the main axis instead.
+  const backdropLanes = useMemo(
+    () =>
+      items
+        .filter(
+          (item): item is LaneId =>
+            item !== MAIN_AXIS_ID &&
+            configs[item].visible &&
+            configs[item].background &&
+            isContinuousLane(LANE_BY_ID[item]),
+        )
+        .map((id) => LANE_BY_ID[id]),
+    [items, configs],
+  );
+
+  const backdropIds = useMemo(
+    () => new Set(backdropLanes.map((l) => l.id)),
+    [backdropLanes],
+  );
+
+  // Effective emphasis: transient chip hover wins over the pinned focus, so
+  // hovering an icon previews that slice at full strength.
+  const effectiveBackdropFocus: LaneId | null =
+    hoveredBackdropChip && backdropIds.has(hoveredBackdropChip)
+      ? hoveredBackdropChip
+      : focusedBackdrop && backdropIds.has(focusedBackdrop)
+        ? focusedBackdrop
+        : null;
 
   const perpSize =
     orientation === "horizontal" ? size.height : size.width;
@@ -516,6 +601,10 @@ export default function TimelineApp() {
     }
     return { target: [perp, -coord], zoomX: 0, zoomY: zoom };
   }, [timeCenter, timeZoom, orientation, size, coordExtent, perpOffset, clampPerp]);
+
+  // A hover year belongs to the view under the pointer when it was sampled.
+  // Invalidate it by identity without scheduling an effect update each frame.
+  const hoverProbe = hoverSample?.view === viewState ? hoverSample.probe : null;
 
   const visibleSpanYears = useMemo(() => {
     if (size.width <= 0 || size.height <= 0) return 0;
@@ -748,6 +837,165 @@ export default function TimelineApp() {
     [],
   );
 
+  const handleBackdropHover = useCallback(
+    (probe: { x: number; y: number; year: number } | null) =>
+      setHoverSample(probe ? { probe, view: viewState } : null),
+    [viewState],
+  );
+
+  const handleBackdropPin = useCallback(
+    (probe: { x: number; y: number; year: number }) => {
+      setHoverSample(null);
+      setPinnedYear(probe.year);
+    },
+    [],
+  );
+
+  // Clamp a cursor-anchored tooltip inside the stage so it can never render
+  // off-screen (e.g. tapping near the right/bottom edge on mobile). Flips to
+  // the other side of the cursor when close to an edge.
+  const clampTooltip = useCallback(
+    (x: number, y: number): { left: number; top: number } => {
+      const w = size.width > 0 ? size.width : 800;
+      const h = size.height > 0 ? size.height : 600;
+      const EST_W = 288;
+      const EST_H = 210;
+      const rawLeft = x > w - EST_W - 24 ? x - EST_W - 12 : x + 14;
+      const rawTop = y > h - EST_H - 24 ? y - EST_H - 12 : y + 16;
+      return {
+        left: Math.min(Math.max(rawLeft, 8), Math.max(w - EST_W - 8, 8)),
+        top: Math.min(Math.max(rawTop, 8), Math.max(h - EST_H - 8, 8)),
+      };
+    },
+    [size.width, size.height],
+  );
+
+  // Year the backdrop chips report values for: live cursor first, then the
+  // pinned tap, then the viewport center so numbers are always visible even
+  // without a probe (notably on touch devices).
+  const centerYear = useMemo(
+    () => coordToYear(clampCoord(timeCenter, coordExtent), scale),
+    [timeCenter, coordExtent, scale],
+  );
+  const hasBackdrop = backdropLanes.length > 0;
+  const probeYear = hasBackdrop
+    ? (hoverProbe?.year ?? pinnedYear ?? centerYear)
+    : centerYear;
+
+  // Project the pinned year back to screen coordinates every frame, at the
+  // viewport's perpendicular center, so the tooltip glides with the graph
+  // while panning instead of sticking to the original tap pixel.
+  const pinnedScreen = useMemo(() => {
+    if (pinnedYear == null || size.width <= 0 || size.height <= 0) return null;
+    const coord = yearToCoord(pinnedYear, scale);
+    const perp =
+      orientation === "horizontal" ? viewState.target[1] : viewState.target[0];
+    const world =
+      orientation === "horizontal"
+        ? ([coord, perp, 0] as [number, number, number])
+        : ([perp, -coord, 0] as [number, number, number]);
+    try {
+      const projected = buildViewport(
+        viewState,
+        size.width,
+        size.height,
+      ).project(world);
+      return { x: projected[0], y: projected[1] };
+    } catch {
+      return null;
+    }
+  }, [pinnedYear, viewState, size.width, size.height, orientation, scale]);
+
+  // Release the pin once its year scrolls out of view (with a small margin),
+  // so chips and tooltip revert to live values instead of showing an
+  // off-screen year. Same when the last backdrop lane is removed.
+  useEffect(() => {
+    if (pinnedYear == null || !visibleCoordRange) return;
+    const zoom =
+      orientation === "horizontal" ? viewState.zoomX : viewState.zoomY;
+    const margin = 16 / Math.pow(2, zoom);
+    const coord = yearToCoord(pinnedYear, scale);
+    if (
+      coord < visibleCoordRange[0] - margin ||
+      coord > visibleCoordRange[1] + margin
+    ) {
+      setPinnedYear(null);
+    }
+  }, [pinnedYear, visibleCoordRange, scale, orientation, viewState.zoomX, viewState.zoomY]);
+
+  useEffect(() => {
+    if (!hasBackdrop) {
+      setHoverSample(null);
+      setHoveredBackdropChip(null);
+      setPinnedYear(null);
+      setFocusedBackdrop(null);
+    }
+  }, [hasBackdrop]);
+
+  interface BackdropValue {
+    id: LaneId;
+    title: string;
+    color: [number, number, number];
+    text: string;
+    estimated: boolean;
+  }
+
+  const backdropValues = useMemo<BackdropValue[]>(
+    () =>
+      backdropLanes.map((lane) => {
+        if (lane.id === "energy") {
+          const interp = interpolateEnergy(probeYear);
+          return {
+            id: lane.id,
+            title: lane.title,
+            color: lane.color,
+            text: formatEnergy(interp.total),
+            estimated: interp.estimated,
+          };
+        }
+        const series =
+          lane.id === "population"
+            ? POPULATION
+            : lane.id === "co2"
+              ? CO2
+              : lane.id === "life-expectancy"
+                ? LIFE_EXPECTANCY
+                : GDP;
+        const format =
+          lane.id === "population"
+            ? formatPopulation
+            : lane.id === "co2"
+              ? formatCO2
+              : lane.id === "life-expectancy"
+                ? formatLifeExpectancy
+                : formatGDP;
+        const interp = interpolateSeries(series, probeYear);
+        return {
+          id: lane.id,
+          title: lane.title,
+          color: lane.color,
+          text: format(interp.value),
+          estimated: interp.estimated,
+        };
+      }),
+    [backdropLanes, probeYear],
+  );
+
+  // Tooltip follows the live cursor when present, else the pinned year at
+  // its projected position (tracked across pans).
+  const liveHover = hasBackdrop ? hoverProbe : null;
+  const livePinned =
+    hasBackdrop && pinnedYear != null && pinnedScreen
+      ? { x: pinnedScreen.x, y: pinnedScreen.y, year: pinnedYear }
+      : null;
+  const activeProbe = liveHover ?? livePinned;
+  const probeRows = activeProbe ? backdropValues : [];
+
+  const probeYearLabel = useMemo(() => {
+    if (!activeProbe) return "";
+    return formatYear(Math.round(activeProbe.year));
+  }, [activeProbe]);
+
   const toggleScale = useCallback(() => {
     const next: Scale = scale === "log" ? "linear" : "log";
     const dim = orientation === "horizontal" ? size.width : size.height;
@@ -814,6 +1062,7 @@ export default function TimelineApp() {
           items={items}
           configs={configs}
           onToggle={toggleLane}
+          onToggleBackdrop={toggleBackdrop}
           onReorder={reorderItem}
           onSetHalf={setLaneHalf}
         />
@@ -843,6 +1092,9 @@ export default function TimelineApp() {
               selectedEvent={selectedEvent}
               lanes={visibleLanes}
               laneBands={laneLayout.bands}
+              backdropLanes={backdropLanes}
+              focusedBackdrop={effectiveBackdropFocus}
+              probeYear={hasBackdrop ? (activeProbe?.year ?? null) : null}
               orientation={orientation}
               scale={scale}
               viewState={viewState}
@@ -856,7 +1108,48 @@ export default function TimelineApp() {
               onSelect={setSelectedEvent}
               onAggregateNavigate={handleAggregateNavigate}
               onHoverAggregate={handleHoverAggregate}
+              onBackdropHover={handleBackdropHover}
+              onBackdropPin={handleBackdropPin}
             />
+
+            {backdropLanes.length > 0 && (
+              <div className="backdrop-panel" role="group" aria-label="Backdrop graphs">
+                <div className="backdrop-panel-heading">
+                  {formatYear(Math.round(probeYear))}
+                </div>
+                {backdropValues.map((row) => {
+                  const focused = effectiveBackdropFocus === row.id;
+                  return (
+                    <button
+                      key={row.id}
+                      type="button"
+                      className={`backdrop-chip${focused ? " focused" : ""}`}
+                      aria-pressed={focusedBackdrop === row.id}
+                      title={`${row.title}: tap to emphasize, tap again to release`}
+                      onClick={() =>
+                        setFocusedBackdrop((f) => (f === row.id ? null : row.id))
+                      }
+                      onPointerEnter={(event) => {
+                        if (event.pointerType === "mouse") setHoveredBackdropChip(row.id);
+                      }}
+                      onPointerLeave={() => setHoveredBackdropChip(null)}
+                    >
+                      <span
+                        className="backdrop-chip-dot"
+                        style={{
+                          background: `rgb(${row.color[0]}, ${row.color[1]}, ${row.color[2]})`,
+                        }}
+                        aria-hidden="true"
+                      />
+                      <span className="backdrop-chip-name">{row.title}</span>
+                      <span className="backdrop-chip-value">
+                        {row.estimated ? `≈ ${row.text}` : row.text}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
 
             <div className="minimap-wrap">
               <Minimap
@@ -880,7 +1173,7 @@ export default function TimelineApp() {
         {hoverAggregate && (
           <div
             className="aggregate-tooltip"
-            style={{ left: hoverAggregate.x + 14, top: hoverAggregate.y + 16 }}
+            style={clampTooltip(hoverAggregate.x, hoverAggregate.y)}
           >
             <div className="aggregate-tooltip-count">
               ~{hoverAggregate.count.toLocaleString("en-US")}+ more
@@ -891,6 +1184,41 @@ export default function TimelineApp() {
                 {hoverAggregate.names.join(" · ")}
               </div>
             )}
+          </div>
+        )}
+
+        {activeProbe && probeRows.length > 0 && (
+          <div
+            className="backdrop-tooltip"
+            style={clampTooltip(activeProbe.x, activeProbe.y)}
+          >
+            <div className="backdrop-tooltip-year">{probeYearLabel}</div>
+            {probeRows.map((row) => (
+              <div key={row.id} className="backdrop-tooltip-row">
+                <span
+                  className="backdrop-chip-dot"
+                  style={{
+                    background: `rgb(${row.color[0]}, ${row.color[1]}, ${row.color[2]})`,
+                  }}
+                  aria-hidden="true"
+                />
+                <span className="backdrop-tooltip-name">{row.title}</span>
+                <span className="backdrop-tooltip-value">
+                  {row.estimated ? `≈ ${row.text}` : row.text}
+                </span>
+              </div>
+            ))}
+            <button
+              type="button"
+              className="backdrop-tooltip-close"
+              aria-label="Dismiss backdrop values"
+              onClick={() => {
+                setPinnedYear(null);
+                setHoverSample(null);
+              }}
+            >
+              Dismiss
+            </button>
           </div>
         )}
 

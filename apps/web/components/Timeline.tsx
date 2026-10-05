@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import DeckGL from "@deck.gl/react";
 import { OrthographicView } from "@deck.gl/core";
 import {
@@ -22,12 +22,15 @@ import { generateTicks, monthYearLabel } from "../lib/ticks";
 import type { LaneBand, LaneDefinition, LaneId } from "../lib/lanes";
 import {
   buildPeriodBands,
+  buildBackdropLayers,
+  buildBackdropProbeLayers,
   buildLaneLayers,
   STICKY_RULER_INSET,
   STICKY_RULER_LABEL_OFFSET,
 } from "./lane-layers";
 import {
   computeOtdLabelLanes,
+  selectOtdLabelEvents,
   otdDotSpreadPx,
   otdPerpOffset,
   otdTimeShiftPx,
@@ -55,31 +58,6 @@ const ON_THIS_DAY_DOT_MARGIN = 48;
 
 const LABEL_ANGLE_DEG = 45;
 
-// Cap the number of on-this-day labels shown at once: at century-level zooms
-// the visible range holds thousands of events, so a dense label cloud is
-// unreadable. Keep a deterministic subset keyed on each event's id, so the
-// chosen labels stay put while panning instead of reshuffling every frame.
-function hashString(text: string): number {
-  let h = 2166136261;
-  for (let i = 0; i < text.length; i++) {
-    h ^= text.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
-  return h >>> 0;
-}
-
-function sampleOtdLabelEvents(
-  events: TimelineEvent[],
-  count: number,
-): TimelineEvent[] {
-  if (events.length <= count) return events;
-  return events
-    .map((event, index) => ({ event, index, hash: hashString(event.id) }))
-    .sort((a, b) => a.hash - b.hash || a.index - b.index)
-    .slice(0, count)
-    .map((entry) => entry.event);
-}
-
 interface TimelineProps {
   events: TimelineEvent[];
   onThisDayEvents: TimelineEvent[];
@@ -90,6 +68,9 @@ interface TimelineProps {
   selectedEvent: EntityDetail | null;
   lanes: LaneDefinition[];
   laneBands: Record<LaneId, LaneBand>;
+  backdropLanes: LaneDefinition[];
+  focusedBackdrop: LaneId | null;
+  probeYear: number | null;
   orientation: Orientation;
   scale: Scale;
   viewState: TimeViewState;
@@ -111,6 +92,8 @@ interface TimelineProps {
       unitNoun?: string;
     } | null,
   ) => void;
+  onBackdropHover: (probe: { x: number; y: number; year: number } | null) => void;
+  onBackdropPin: (probe: { x: number; y: number; year: number }) => void;
 }
 
 export default function Timeline({
@@ -123,6 +106,9 @@ export default function Timeline({
   selectedEvent,
   lanes,
   laneBands,
+  backdropLanes,
+  focusedBackdrop,
+  probeYear,
   orientation,
   scale,
   viewState,
@@ -136,6 +122,8 @@ export default function Timeline({
   onSelect,
   onAggregateNavigate,
   onHoverAggregate,
+  onBackdropHover,
+  onBackdropPin,
 }: TimelineProps) {
   const offset = (coord: number, perp: number): [number, number, number] =>
     timeOffset(coord, perp, orientation);
@@ -193,10 +181,19 @@ export default function Timeline({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onThisDayEvents, visibleCoordRange, scale, selectedEvent, viewState.zoomX, viewState.zoomY, orientation]);
 
+  // Only committed selections become the previous frame's label set.
+  const prevOtdLabelIdsRef = useRef<Set<string> | null>(null);
   const otdLabelEvents = useMemo(
-    () => sampleOtdLabelEvents(onThisDayVisibleEvents, otdLabelSampleCount),
+    () => selectOtdLabelEvents(
+      onThisDayVisibleEvents,
+      prevOtdLabelIdsRef.current,
+      otdLabelSampleCount,
+    ),
     [onThisDayVisibleEvents, otdLabelSampleCount],
   );
+  useEffect(() => {
+    prevOtdLabelIdsRef.current = new Set(otdLabelEvents.map((event) => event.id));
+  }, [otdLabelEvents]);
 
   const otdLabelLanes = useMemo(() => {
     if (!showOtdLabels || otdLabelEvents.length === 0) {
@@ -456,6 +453,20 @@ export default function Timeline({
     const laneLayers = lanes.flatMap((lane) =>
       buildLaneLayers(lane, laneBands[lane.id], laneOptions),
     );
+    const backdropLayers =
+      backdropLanes.length > 0
+        ? buildBackdropLayers(backdropLanes, {
+            ...laneOptions,
+            focusedId: focusedBackdrop,
+          })
+        : [];
+    const probeLayers =
+      backdropLanes.length > 0 && probeYear != null
+        ? buildBackdropProbeLayers(backdropLanes, probeYear, {
+            ...laneOptions,
+            focusedId: focusedBackdrop,
+          })
+        : [];
 
     // Reference guides run the full perpendicular extent of the viewport. They
     // sit above the lanes so a bar deep in the stack stays traceable to the
@@ -513,6 +524,7 @@ export default function Timeline({
     })();
 
     return [
+      ...backdropLayers,
       new LineLayer({
         id: "axis",
         data: axisData,
@@ -535,6 +547,9 @@ export default function Timeline({
         getWidth: 1,
         pickable: false,
       }),
+      // Probe marker above the lanes so the anchored year reads even where
+      // interval bands overlap the backdrop, but below the ruler and labels.
+      ...probeLayers,
       new LineLayer({
         id: "ruler",
         data: rulerData,
@@ -616,6 +631,20 @@ export default function Timeline({
         lineWidthMinPixels: 1,
         radiusUnits: "pixels",
         getRadius: (d) => d.radius,
+        pickable: true,
+        parameters: { depthTest: false },
+      }),
+      // Fat invisible tap target over the event dots (same pattern as
+      // on-this-day-hit): 4.5px dots are hard to hit with a finger, and a
+      // near-miss currently reads as "tap empty backdrop" instead. Carries
+      // the same objects so a tap selects the event AND pins the probe.
+      new ScatterplotLayer({
+        id: "events-hit",
+        data: eventPoints,
+        getPosition: (d) => d.position,
+        getFillColor: [0, 0, 0, 0],
+        radiusUnits: "pixels",
+        getRadius: 14,
         pickable: true,
         parameters: { depthTest: false },
       }),
@@ -760,6 +789,9 @@ export default function Timeline({
     selectedEvent,
     lanes,
     laneBands,
+    backdropLanes,
+    focusedBackdrop,
+    probeYear,
     orientation,
     scale,
     minSignificance,
@@ -818,6 +850,22 @@ export default function Timeline({
         } else {
           onHoverAggregate(null);
         }
+        if (backdropLanes.length > 0) {
+          const coord = info.coordinate as [number, number] | undefined;
+          if (coord && info.x >= 0 && info.y >= 0 && info.viewport?.containsPixel({ x: info.x, y: info.y })) {
+            const timeCoord =
+              orientation === "horizontal" ? coord[0] : -coord[1];
+            onBackdropHover({
+              x: info.x,
+              y: info.y,
+              year: coordToYear(timeCoord, scale),
+            });
+          } else {
+            onBackdropHover(null);
+          }
+        } else {
+          onBackdropHover(null);
+        }
       }}
       onClick={(info) => {
         const obj = info.object as
@@ -827,6 +875,18 @@ export default function Timeline({
               aggregate?: AggregateInfo;
             }
           | null;
+        if (backdropLanes.length > 0) {
+          const coord = info.coordinate as [number, number] | undefined;
+          if (coord && typeof info.x === "number" && typeof info.y === "number") {
+            const timeCoord =
+              orientation === "horizontal" ? coord[0] : -coord[1];
+            onBackdropPin({
+              x: info.x,
+              y: info.y,
+              year: coordToYear(timeCoord, scale),
+            });
+          }
+        }
         if (obj?.aggregate) {
           onAggregateNavigate(obj.aggregate.startYear, obj.aggregate.endYear);
           return;
